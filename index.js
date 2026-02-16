@@ -45,23 +45,34 @@ function getBalance(userId) {
 
 // ===== DISCORD BOT =====
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
 });
 
 client.on("ready", () => {
-  console.log(`Logged in as ${client.user.tag}`);
+  console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  // /pay 10
+  // ===== /pay =====
   if (message.content.startsWith("/pay")) {
     const args = message.content.split(" ");
     const amount = parseFloat(args[1]);
+    const crypto = args[2]?.toLowerCase();
 
-    if (!amount) {
-      return message.reply("Укажи сумму: /pay 10");
+    if (!amount || !crypto) {
+      return message.reply(
+        "Используй: `/pay 10 btc` или `/pay 10 ltc`"
+      );
+    }
+
+    if (crypto !== "btc" && crypto !== "ltc") {
+      return message.reply("Доступно только: btc или ltc");
     }
 
     try {
@@ -70,7 +81,7 @@ client.on("messageCreate", async (message) => {
         {
           price_amount: amount,
           price_currency: "usd",
-          pay_currency: "usdt",
+          pay_currency: crypto,
           order_id: message.author.id,
           ipn_callback_url: WEBHOOK_URL
         },
@@ -84,17 +95,19 @@ client.on("messageCreate", async (message) => {
 
       const invoiceUrl = response.data.invoice_url;
 
-      message.reply(`Оплати по ссылке:\n${invoiceUrl}`);
+      message.reply(
+        `💰 Оплати ${crypto.toUpperCase()} по ссылке:\n${invoiceUrl}`
+      );
     } catch (err) {
-      console.log(err.response?.data || err.message);
-      message.reply("Ошибка создания платежа.");
+      console.log("NOWPayments error:", err.response?.data || err.message);
+      message.reply("❌ Ошибка создания платежа.");
     }
   }
 
-  // /balance
+  // ===== /balance =====
   if (message.content === "/balance") {
     const bal = await getBalance(message.author.id);
-    message.reply(`Ваш баланс: ${bal} USD`);
+    message.reply(`💳 Ваш баланс: ${bal} USD`);
   }
 });
 
@@ -105,19 +118,22 @@ app.use(express.json());
 app.post("/webhook", (req, res) => {
   const data = req.body;
 
+  console.log("Webhook received:", data);
+
   if (data.payment_status === "finished") {
     const userId = data.order_id;
     const amount = parseFloat(data.price_amount || 0);
 
     addBalance(userId, amount);
-    console.log(`Баланс ${userId} пополнен на ${amount}`);
+
+    console.log(`✅ Баланс ${userId} пополнен на ${amount} USD`);
   }
 
   res.sendStatus(200);
 });
 
 app.listen(PORT, () => {
-  console.log("Webhook server running...");
+  console.log("🌐 Webhook server running on port", PORT);
 });
 
 // ===== START BOT =====
