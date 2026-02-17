@@ -39,9 +39,9 @@ const client = new Client({
 });
 
 client.once("ready", () => {
-  console.log(`вњ… Logged in as ${client.user.tag}`);
+  console.log(`✅ Logged in as ${client.user.tag}`);
   client.user.setPresence({
-    activities: [{ name: "рџ’і Crypto Payments | /pay", type: 0 }],
+    activities: [{ name: "💳 Crypto Payments | /pay", type: 0 }],
     status: "online"
   });
 });
@@ -73,11 +73,11 @@ async function getBalance(userId) {
 
 // ===== CURRENCY CONFIG =====
 const CURRENCIES = {
-  BTC:  { emoji: "в‚ї", name: "Bitcoin",        color: "#F7931A" },
-  LTC:  { emoji: "ЕЃ", name: "Litecoin",        color: "#BFBBBB" },
-  ETH:  { emoji: "Оћ", name: "Ethereum",        color: "#627EEA" },
-  USDT: { emoji: "в‚®", name: "Tether (TRC20)",  color: "#26A17B" },
-  SOL:  { emoji: "в—Ћ", name: "Solana",          color: "#9945FF" }
+  BTC:  { emoji: "₿", name: "Bitcoin",        color: "#F7931A" },
+  LTC:  { emoji: "Ł", name: "Litecoin",        color: "#BFBBBB" },
+  ETH:  { emoji: "Ξ", name: "Ethereum",        color: "#627EEA" },
+  USDT: { emoji: "₮", name: "Tether (TRC20)",  color: "#26A17B" },
+  SOL:  { emoji: "◎", name: "Solana",          color: "#9945FF" }
 };
 
 // ===== CREATE PAYMENT =====
@@ -104,25 +104,25 @@ async function createPayment(userId, amount, currency) {
 // ===== EMBEDS =====
 function buildMainMenuEmbed() {
   return new EmbedBuilder()
-    .setTitle("рџ’і  Crypto Payment Bot")
+    .setTitle("💳  Crypto Payment Bot")
     .setDescription(
-      "```\nSecure В· Fast В· Anonymous\n```\n" +
+      "```\nSecure · Fast · Anonymous\n```\n" +
       "Top up your balance using cryptocurrency.\n" +
       "Select an action below to get started."
     )
     .addFields({
-      name: "рџ“Њ Commands",
-      value: "`/pay` вЂ” Top up balance\n`/balance` вЂ” Check balance\n`/help` вЂ” Show this menu",
+      name: "📌 Commands",
+      value: "`/pay` — Top up balance\n`/balance` — Check balance\n`/help` — Show this menu",
       inline: false
     })
     .setColor(0x5865F2)
-    .setFooter({ text: "Powered by NOWPayments вЂў Secure crypto processing" })
+    .setFooter({ text: "Powered by NOWPayments • Secure crypto processing" })
     .setTimestamp();
 }
 
 function buildBalanceEmbed(userId, balance, tag) {
   return new EmbedBuilder()
-    .setTitle("рџ’і  Your Balance")
+    .setTitle("💳  Your Balance")
     .setDescription(`Account: **${tag}**`)
     .addFields(
       { name: "Available Balance", value: `**${balance.toFixed(2)} USD**`, inline: false },
@@ -134,39 +134,39 @@ function buildBalanceEmbed(userId, balance, tag) {
 }
 
 function buildPaymentEmbed(payment, currency) {
-  const cur = CURRENCIES[currency] || { emoji: "рџЄ™", name: currency };
+  const cur = CURRENCIES[currency] || { emoji: "🪙", name: currency };
   return new EmbedBuilder()
-    .setTitle(`${cur.emoji}  Payment Created вЂ” ${cur.name}`)
+    .setTitle(`${cur.emoji}  Payment Created — ${cur.name}`)
     .setDescription(
       "Send the **exact amount** to the address below.\n" +
-      `вљ пёЏ Send only **${currency}** to this address!`
+      `⚠️ Send only **${currency}** to this address!`
     )
     .addFields(
       {
-        name: "рџ“¬ Payment Address",
+        name: "📬 Payment Address",
         value: payment.pay_address
           ? `\`\`\`\n${payment.pay_address}\n\`\`\``
           : "Address not available yet"
       },
       {
-        name: "рџ’° Amount to Send",
+        name: "💰 Amount to Send",
         value: `**${payment.pay_amount} ${payment.pay_currency}**`,
         inline: true
       },
       {
-        name: "рџ’µ USD Equivalent",
+        name: "💵 USD Equivalent",
         value: `**${payment.price_amount} USD**`,
         inline: true
       },
       {
-        name: "вЏ° Expires At",
+        name: "⏰ Expires At",
         value: payment.expiration_estimate_date
           ? `<t:${Math.floor(new Date(payment.expiration_estimate_date).getTime() / 1000)}:R>`
           : "~20 minutes",
         inline: true
       },
       {
-        name: "рџ”‘ Payment ID",
+        name: "🔑 Payment ID",
         value: `\`${payment.payment_id}\``,
         inline: false
       }
@@ -187,7 +187,7 @@ function buildCurrencyMenu(customId = "select_currency") {
 
   const menu = new StringSelectMenuBuilder()
     .setCustomId(customId)
-    .setPlaceholder("рџЄ™  Select a cryptocurrency...")
+    .setPlaceholder("🪙  Select a cryptocurrency...")
     .addOptions(options);
 
   return new ActionRowBuilder().addComponents(menu);
@@ -212,20 +212,20 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   const cmd = message.content.trim().toLowerCase().split(" ")[0];
 
-  // в”Ђв”Ђв”Ђ /help в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ─── /help ───────────────────────────────────────────────────────────────
   if (cmd === "/help") {
     const embed = buildMainMenuEmbed();
     const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("btn_pay").setLabel("рџ’і  Top Up Balance").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId("btn_balance").setLabel("рџ’°  My Balance").setStyle(ButtonStyle.Primary)
+      new ButtonBuilder().setCustomId("btn_pay").setLabel("💳  Top Up Balance").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("btn_balance").setLabel("💰  My Balance").setStyle(ButtonStyle.Primary)
     );
     await message.reply({ embeds: [embed], components: [row] });
   }
 
-  // в”Ђв”Ђв”Ђ /pay в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ─── /pay ────────────────────────────────────────────────────────────────
   if (cmd === "/pay") {
     const embed = new EmbedBuilder()
-      .setTitle("рџ’і  Top Up Balance")
+      .setTitle("💳  Top Up Balance")
       .setDescription("**Step 1 of 2:** Choose the cryptocurrency you want to pay with.")
       .setColor(0x5865F2)
       .setFooter({ text: "You'll choose the amount next" });
@@ -233,7 +233,7 @@ client.on("messageCreate", async (message) => {
     await message.reply({ embeds: [embed], components: [buildCurrencyMenu("pay_currency")] });
   }
 
-  // в”Ђв”Ђв”Ђ /balance в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ─── /balance ────────────────────────────────────────────────────────────
   if (cmd === "/balance") {
     const balance = await getBalance(message.author.id);
     const embed = buildBalanceEmbed(message.author.id, balance, message.author.tag);
@@ -244,12 +244,12 @@ client.on("messageCreate", async (message) => {
 // ===== INTERACTION HANDLER =====
 client.on("interactionCreate", async (interaction) => {
 
-  // в”Ђв”Ђв”Ђ Buttons в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ─── Buttons ─────────────────────────────────────────────────────────────
   if (interaction.isButton()) {
 
     if (interaction.customId === "btn_pay") {
       const embed = new EmbedBuilder()
-        .setTitle("рџ’і  Top Up Balance")
+        .setTitle("💳  Top Up Balance")
         .setDescription("**Step 1 of 2:** Choose the cryptocurrency you want to pay with.")
         .setColor(0x5865F2);
       await interaction.reply({
@@ -265,14 +265,14 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
-    // в”Ђв”Ђв”Ђ Amount buttons (after currency chosen) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+    // ─── Amount buttons (after currency chosen) ─────────────────────────
     if (interaction.customId.startsWith("amt_")) {
       const userId = interaction.user.id;
       const pending = pendingPayments.get(userId);
 
       if (!pending) {
         return interaction.reply({
-          content: "вљ пёЏ Session expired. Please use `/pay` again.",
+          content: "⚠️ Session expired. Please use `/pay` again.",
           ephemeral: true
         });
       }
@@ -280,7 +280,7 @@ client.on("interactionCreate", async (interaction) => {
       if (interaction.customId === "amt_custom") {
         const modal = new ModalBuilder()
           .setCustomId("modal_custom_amount")
-          .setTitle("рџ’µ Enter Custom Amount");
+          .setTitle("💵 Enter Custom Amount");
 
         const input = new TextInputBuilder()
           .setCustomId("custom_amount_input")
@@ -304,7 +304,7 @@ client.on("interactionCreate", async (interaction) => {
     }
   }
 
-  // в”Ђв”Ђв”Ђ Select Menu: currency chosen в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ─── Select Menu: currency chosen ───────────────────────────────────────
   if (interaction.isStringSelectMenu() && interaction.customId === "pay_currency") {
     const currency = interaction.values[0];
     const userId = interaction.user.id;
@@ -324,14 +324,14 @@ client.on("interactionCreate", async (interaction) => {
     });
   }
 
-  // в”Ђв”Ђв”Ђ Modal: custom amount submitted в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // ─── Modal: custom amount submitted ─────────────────────────────────────
   if (interaction.isModalSubmit() && interaction.customId === "modal_custom_amount") {
     const userId = interaction.user.id;
     const pending = pendingPayments.get(userId);
 
     if (!pending) {
       return interaction.reply({
-        content: "вљ пёЏ Session expired. Please use `/pay` again.",
+        content: "⚠️ Session expired. Please use `/pay` again.",
         ephemeral: true
       });
     }
@@ -341,7 +341,7 @@ client.on("interactionCreate", async (interaction) => {
 
     if (isNaN(amount) || amount < 1 || amount > 1000) {
       return interaction.reply({
-        content: "вќЊ Invalid amount. Please enter a number between 1 and 1000.",
+        content: "❌ Invalid amount. Please enter a number between 1 and 1000.",
         ephemeral: true
       });
     }
@@ -365,14 +365,14 @@ async function processPayment(interaction, userId, amount, currency) {
       const user = await client.users.fetch(userId);
       await user.send({ embeds: [embed] });
       await interaction.editReply({
-        content: "рџ“¬ Payment details sent to your **DMs**! Check your direct messages.",
+        content: "📬 Payment details sent to your **DMs**! Check your direct messages.",
         embeds: [],
         components: []
       });
     } catch {
       // If DMs are disabled, show in ephemeral reply
       await interaction.editReply({
-        content: "рџ“‹ Here are your payment details (DMs are disabled):",
+        content: "📋 Here are your payment details (DMs are disabled):",
         embeds: [embed],
         components: []
       });
@@ -384,7 +384,7 @@ async function processPayment(interaction, userId, amount, currency) {
   } catch (err) {
     console.error("Payment creation error:", err.response?.data || err.message);
     await interaction.editReply({
-      content: "вќЊ Failed to create payment. Please try again later.",
+      content: "❌ Failed to create payment. Please try again later.",
       embeds: [],
       components: []
     });
@@ -404,37 +404,37 @@ function verifyIPN(req) {
 const STATUS_CONFIG = {
   waiting: {
     color: 0xFEE75C,
-    icon: "вЏі",
+    icon: "⏳",
     title: "Payment Waiting",
     desc: "We're waiting for your crypto transfer. Send the exact amount to the address provided."
   },
   confirming: {
     color: 0x5865F2,
-    icon: "рџ”„",
+    icon: "🔄",
     title: "Confirming...",
     desc: "Payment received! Waiting for blockchain confirmations. This may take a few minutes."
   },
   confirmed: {
     color: 0x57F287,
-    icon: "рџ’љ",
+    icon: "💚",
     title: "Payment Confirmed",
     desc: "Your payment has been confirmed by the network. Balance will update shortly."
   },
   finished: {
     color: 0x57F287,
-    icon: "вњ…",
+    icon: "✅",
     title: "Payment Complete!",
     desc: "Your balance has been topped up successfully."
   },
   failed: {
     color: 0xED4245,
-    icon: "вќЊ",
+    icon: "❌",
     title: "Payment Failed",
     desc: "Unfortunately your payment failed. Please create a new payment and try again."
   },
   expired: {
     color: 0x99AAB5,
-    icon: "рџ’Ђ",
+    icon: "💀",
     title: "Payment Expired",
     desc: "The payment window has expired. Use `/pay` to create a new payment."
   }
@@ -444,13 +444,13 @@ const STATUS_CONFIG = {
 const app = express();
 app.use(express.json());
 
-app.get("/", (_req, res) => res.send("вњ… Bot is online"));
+app.get("/", (_req, res) => res.send("✅ Bot is online"));
 
 app.post("/webhook", async (req, res) => {
-  console.log("рџ“© Webhook received:", req.body);
+  console.log("📩 Webhook received:", req.body);
 
   if (!verifyIPN(req)) {
-    console.warn("вќЊ Invalid IPN signature");
+    console.warn("❌ Invalid IPN signature");
     return res.status(401).send("Invalid signature");
   }
 
@@ -493,6 +493,6 @@ app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 });
 
-app.listen(PORT, () => console.log(`рџЊђ Webhook server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🌐 Webhook server running on port ${PORT}`));
 
 client.login(DISCORD_TOKEN);
