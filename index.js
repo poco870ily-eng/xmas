@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits } from "discord.js";
+import { Client, GatewayIntentBits, EmbedBuilder } from "discord.js";
 import express from "express";
 import axios from "axios";
 import sqlite3 from "sqlite3";
@@ -66,9 +66,7 @@ client.on("messageCreate", async (message) => {
     const crypto = args[2]?.toLowerCase();
 
     if (!amount || !crypto) {
-      return message.reply(
-        "Используй: `/pay 10 btc` или `/pay 10 ltc`"
-      );
+      return message.reply("Используй: `/pay 10 btc` или `/pay 10 ltc`");
     }
 
     if (crypto !== "btc" && crypto !== "ltc") {
@@ -93,11 +91,24 @@ client.on("messageCreate", async (message) => {
         }
       );
 
-      const invoiceUrl = response.data.invoice_url;
+      const invoice = response.data;
 
-      message.reply(
-        `💰 Оплати ${crypto.toUpperCase()} по ссылке:\n${invoiceUrl}`
-      );
+      // Создаём embed
+      const embed = new EmbedBuilder()
+        .setTitle(`💰 Инвойс для оплаты`)
+        .setColor("#FFD700")
+        .addFields(
+          { name: "Сумма", value: `${invoice.price_amount} USD`, inline: true },
+          { name: "Валюта", value: `${invoice.pay_currency.toUpperCase()}`, inline: true },
+          { name: "Адрес для оплаты", value: `\`${invoice.pay_address}\`` },
+          { name: "Ссылка на оплату", value: invoice.invoice_url },
+          { name: "Статус", value: "Ожидание оплаты ⏳", inline: true },
+          { name: "Срок действия", value: `${new Date(invoice.expire_date).toLocaleString()}`, inline: true }
+        )
+        .setTimestamp();
+
+      await message.author.send({ embeds: [embed] });
+      message.reply("📬 Инвойс отправлен в ЛС!");
     } catch (err) {
       console.log("NOWPayments error:", err.response?.data || err.message);
       message.reply("❌ Ошибка создания платежа.");
@@ -115,7 +126,7 @@ client.on("messageCreate", async (message) => {
 const app = express();
 app.use(express.json());
 
-app.post("/webhook", (req, res) => {
+app.post("/webhook", async (req, res) => {
   const data = req.body;
 
   console.log("Webhook received:", data);
@@ -125,8 +136,25 @@ app.post("/webhook", (req, res) => {
     const amount = parseFloat(data.price_amount || 0);
 
     addBalance(userId, amount);
-
     console.log(`✅ Баланс ${userId} пополнен на ${amount} USD`);
+
+    // ===== Уведомление в Discord через embed =====
+    try {
+      const user = await client.users.fetch(userId);
+      const embed = new EmbedBuilder()
+        .setTitle("✅ Платёж зачислен")
+        .setColor("#00FF00")
+        .addFields(
+          { name: "Сумма", value: `${amount} USD`, inline: true },
+          { name: "Статус", value: "Завершено ✅", inline: true },
+          { name: "Баланс обновлён", value: "Вы можете проверить с помощью /balance" }
+        )
+        .setTimestamp();
+
+      await user.send({ embeds: [embed] });
+    } catch (err) {
+      console.log("Ошибка отправки ЛС:", err.message);
+    }
   }
 
   res.sendStatus(200);
