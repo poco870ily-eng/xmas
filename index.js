@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, EmbedBuilder } from "discord.js";
+import { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder } from "discord.js";
 import express from "express";
 import axios from "axios";
 import crypto from "crypto";
@@ -28,7 +28,6 @@ const client = new Client({
 
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
-
   client.user.setPresence({
     activities: [{ name: "Crypto Payments 💰" }],
     status: "online"
@@ -60,86 +59,119 @@ async function getBalance(userId) {
   return data ? parseFloat(data.balance) : 0;
 }
 
-// ===== DISCORD COMMANDS =====
+// ===== КОМАНДА /pay (только сумма) =====
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   if (message.content.startsWith("/pay")) {
     const args = message.content.split(" ");
     const amount = parseFloat(args[1]);
-    const cryptoCurrency = args[2]?.toUpperCase();
 
-    if (!amount || !cryptoCurrency) {  
-      return message.reply("Use: `/pay 10 BTC` or `/pay 10 LTC`");  
-    }  
-
-    if (!["BTC", "LTC"].includes(cryptoCurrency)) {  
-      return message.reply("Available currencies: BTC or LTC");  
-    }  
-
-    try {  
-      const response = await axios.post(  
-        "https://api.nowpayments.io/v1/payment",  
-        {  
-          price_amount: amount,  
-          price_currency: "USD",  
-          pay_currency: cryptoCurrency,  
-          order_id: message.author.id,  
-          ipn_callback_url: WEBHOOK_URL  
-        },  
-        {  
-          headers: {  
-            "x-api-key": NOWPAYMENTS_API_KEY,  
-            "Content-Type": "application/json"  
-          }  
-        }  
-      );  
-
-      const payment = response.data;  
-      console.log("Payment response:", payment);
-
-      // ✅ ИСПРАВЛЕННАЯ РАБОЧАЯ ССЫЛКА (точно как должно быть)
-      const payLink = payment.invoice_url || 
-                     (payment.payment_id ? `https://nowpayments.io/payment/?iid=${payment.payment_id}` : null);
-
-      const embed = new EmbedBuilder()  
-        .setTitle("💰 Payment Instructions")  
-        .setColor("#FFD700")  
-        .addFields(  
-          { 
-            name: "🔗 Pay Link", 
-            value: payLink 
-              ? `[Click Here to Pay](${payLink})` 
-              : "Link will appear soon" 
-          },
-          { name: "Amount", value: `${payment.price_amount} USD`, inline: true },  
-          { name: "To Pay", value: `${payment.pay_amount} ${payment.pay_currency}`, inline: true },  
-          {  
-            name: "Payment Address",  
-            value: payment.pay_address ? `\`${payment.pay_address}\`` : "Use Pay Link above"  
-          },  
-          { name: "Status", value: payment.payment_status || "waiting", inline: true },  
-          {  
-            name: "Expires At",  
-            value: payment.expiration_estimate_date  
-              ? new Date(payment.expiration_estimate_date).toLocaleString()  
-              : "Not specified",  
-            inline: true  
-          }  
-        )  
-        .setTimestamp();  
-
-      await message.author.send({ embeds: [embed] });  
-      message.reply("📬 Payment details sent to your DM!");  
-    } catch (err) {  
-      console.error("NOWPayments error:", err.response?.data || err.message);  
-      message.reply("❌ Failed to create payment.");  
+    if (!amount || isNaN(amount) || amount <= 0) {
+      return message.reply("Используй: `/pay 10` — где 10 это сумма в USD");
     }
+
+    // Меню выбора валюты (в самом боте)
+    const select = new StringSelectMenuBuilder()
+      .setCustomId(`pay_select_${message.author.id}_${amount}`)
+      .setPlaceholder("Выберите криптовалюту")
+      .addOptions([
+        {
+          label: "Bitcoin (BTC)",
+          value: "BTC",
+          description: "Оплатить в Bitcoin",
+          emoji: "₿"
+        },
+        {
+          label: "Litecoin (LTC)",
+          value: "LTC",
+          description: "Оплатить в Litecoin",
+          emoji: "Ł"
+        }
+      ]);
+
+    const row = new ActionRowBuilder().addComponents(select);
+
+    await message.reply({
+      content: `**💰 Оплата на сумму ${amount} USD**\nВыберите валюту для оплаты:`,
+      components: [row]
+    });
   }
 
   if (message.content === "/balance") {
     const bal = await getBalance(message.author.id);
-    message.reply(`💳 Your balance: ${bal} USD`);
+    message.reply(`💳 Ваш баланс: ${bal} USD`);
+  }
+});
+
+// ===== ВЫБОР ВАЛЮТЫ И СОЗДАНИЕ ПЛАТЕЖА =====
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isStringSelectMenu()) return;
+
+  const customId = interaction.customId;
+  if (!customId.startsWith("pay_select_")) return;
+
+  const [, , userId, amountStr] = customId.split("_");
+  const selectedCurrency = interaction.values[0];
+  const amount = parseFloat(amountStr);
+
+  if (interaction.user.id !== userId) {
+    return interaction.reply({ content: "Это не твоя команда оплаты.", ephemeral: true });
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  try {
+    const response = await axios.post(
+      "https://api.nowpayments.io/v1/payment",
+      {
+        price_amount: amount,
+        price_currency: "USD",
+        pay_currency: selectedCurrency,
+        order_id: userId,
+        ipn_callback_url: WEBHOOK_URL
+      },
+      {
+        headers: {
+          "x-api-key": NOWPAYMENTS_API_KEY,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    const payment = response.data;
+
+    // Эмбед БЕЗ ССЫЛКИ — только адрес (как ты просил)
+    const embed = new EmbedBuilder()
+      .setTitle("💰 Инструкция по оплате")
+      .setColor("#FFD700")
+      .addFields(
+        { name: "Сумма", value: `${payment.price_amount} USD`, inline: true },
+        { name: "К оплате", value: `${payment.pay_amount} ${selectedCurrency}`, inline: true },
+        {
+          name: "Адрес для оплаты",
+          value: payment.pay_address ? `\`${payment.pay_address}\`` : "Адрес появится позже"
+        },
+        {
+          name: "Действителен до",
+          value: payment.expiration_estimate_date
+            ? new Date(payment.expiration_estimate_date).toLocaleString()
+            : "Не указано",
+          inline: true
+        }
+      )
+      .setTimestamp();
+
+    await interaction.user.send({ embeds: [embed] });
+
+    await interaction.editReply({
+      content: `✅ Платёж на ${amount} USD в ${selectedCurrency} создан!\nИнструкция отправлена тебе в ЛС.`,
+      components: []
+    });
+
+  } catch (err) {
+    console.error("NOWPayments error:", err.response?.data || err.message);
+    await interaction.editReply("❌ Ошибка при создании платежа. Попробуй позже.");
   }
 });
 
@@ -175,22 +207,22 @@ app.post("/webhook", async (req, res) => {
   try {
     const user = await client.users.fetch(userId);
 
-    if (status === "waiting") await user.send("⏳ Payment created. Waiting for transfer...");
-    if (status === "confirming") await user.send("🔄 Payment received. Waiting for blockchain confirmations...");
-    if (status === "confirmed") await user.send("💰 Payment confirmed by network.");
-    if (status === "finished") {  
-      await addBalance(userId, amount);  
+    if (status === "waiting") await user.send("⏳ Платёж создан. Ожидаем перевод...");
+    if (status === "confirming") await user.send("🔄 Получен перевод. Ожидаем подтверждений сети...");
+    if (status === "confirmed") await user.send("💰 Платёж подтверждён сетью.");
+    if (status === "finished") {
+      await addBalance(userId, amount);
 
-      const embed = new EmbedBuilder()  
-        .setTitle("✅ Payment Completed")  
-        .setColor("#00FF00")  
-        .addFields(  
-          { name: "Amount", value: `${amount} USD`, inline: true },  
-          { name: "Balance Updated", value: "Check using /balance" }  
-        )  
-        .setTimestamp();  
+      const embed = new EmbedBuilder()
+        .setTitle("✅ Платёж успешно зачислен")
+        .setColor("#00FF00")
+        .addFields(
+          { name: "Сумма", value: `${amount} USD`, inline: true },
+          { name: "Баланс обновлён", value: "Проверь через /balance" }
+        )
+        .setTimestamp();
 
-      await user.send({ embeds: [embed] });  
+      await user.send({ embeds: [embed] });
     }
   } catch (err) {
     console.log("DM error:", err.message);
