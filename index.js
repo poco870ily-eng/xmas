@@ -12,8 +12,7 @@ import {
   TextInputStyle,
   REST,
   Routes,
-  ApplicationCommandOptionType,
-  PermissionFlagsBits
+  ApplicationCommandOptionType
 } from "discord.js";
 import express from "express";
 import axios from "axios";
@@ -21,15 +20,21 @@ import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 
 // ===== ENV =====
-const DISCORD_TOKEN    = process.env.DISCORD_TOKEN;
-const CLIENT_ID        = process.env.CLIENT_ID;        // ← Discord Application Client ID
+const DISCORD_TOKEN       = process.env.DISCORD_TOKEN;
+const CLIENT_ID           = process.env.CLIENT_ID;
 const NOWPAYMENTS_API_KEY = process.env.NOWPAYMENTS_API_KEY;
-const IPN_SECRET       = process.env.IPN_SECRET;
-const WEBHOOK_URL      = process.env.WEBHOOK_URL;
-const PORT             = process.env.PORT || 3000;
-const SUPABASE_URL     = process.env.SUPABASE_URL;
-const SUPABASE_KEY     = process.env.SUPABASE_KEY;     // service_role key!
-const OWNER_ID         = process.env.OWNER_ID;
+const IPN_SECRET          = process.env.IPN_SECRET;
+const WEBHOOK_URL         = process.env.WEBHOOK_URL;
+const PORT                = process.env.PORT || 3000;
+const SUPABASE_URL        = process.env.SUPABASE_URL;
+const SUPABASE_KEY        = process.env.SUPABASE_KEY; // service_role key!
+const OWNER_ID            = process.env.OWNER_ID;
+
+// ===== ROLE NAMES =====
+// "Pay Access"  → can use /forceadd
+// "Pay Access+" → can use /forceadd + receives DM when anyone pays successfully
+const ROLE_ACCESS      = "Pay Access";
+const ROLE_ACCESS_PLUS = "Pay Access+";
 
 // ===== SUPABASE =====
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -44,7 +49,7 @@ const client = new Client({
   ]
 });
 
-// ===== SLASH COMMANDS DEFINITIONS =====
+// ===== SLASH COMMANDS =====
 const SLASH_COMMANDS = [
   {
     name: "pay",
@@ -60,8 +65,7 @@ const SLASH_COMMANDS = [
   },
   {
     name: "forceadd",
-    description: "🔧 [Owner] Manually add balance to a user",
-    default_member_permissions: String(PermissionFlagsBits.Administrator),
+    description: "🔧 [Pay Access] Manually add balance to a user",
     options: [
       {
         name: "user",
@@ -81,7 +85,7 @@ const SLASH_COMMANDS = [
   }
 ];
 
-// ===== REGISTER SLASH COMMANDS ON READY =====
+// ===== REGISTER COMMANDS ON READY =====
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
@@ -100,7 +104,69 @@ client.once("ready", async () => {
   });
 });
 
-// ===== HELPERS =====
+// ===== ROLE HELPERS =====
+
+/** Check if a GuildMember has a role by name (case-insensitive). */
+function memberHasRole(member, roleName) {
+  return member.roles.cache.some(
+    r => r.name.toLowerCase() === roleName.toLowerCase()
+  );
+}
+
+/**
+ * Returns the access tier of a user across all guilds the bot is in.
+ * "plus"  → has Pay Access+
+ * "basic" → has Pay Access (but not Plus)
+ * null    → no access role found
+ * OWNER_ID always gets "plus".
+ */
+async function getAccessTier(userId) {
+  if (userId === OWNER_ID) return "plus";
+
+  for (const [, guild] of client.guilds.cache) {
+    let member;
+    try {
+      member = await guild.members.fetch(userId);
+    } catch {
+      continue; // user not in this guild
+    }
+
+    if (memberHasRole(member, ROLE_ACCESS_PLUS)) return "plus";
+    if (memberHasRole(member, ROLE_ACCESS))      return "basic";
+  }
+
+  return null;
+}
+
+/**
+ * Fetches all User objects across all guilds who have the Pay Access+ role.
+ * Deduplicates by user ID.
+ */
+async function getAccessPlusUsers() {
+  const seen  = new Set();
+  const users = [];
+
+  for (const [, guild] of client.guilds.cache) {
+    let members;
+    try {
+      members = await guild.members.fetch();
+    } catch {
+      continue;
+    }
+
+    for (const [, member] of members) {
+      if (seen.has(member.id)) continue;
+      if (memberHasRole(member, ROLE_ACCESS_PLUS)) {
+        seen.add(member.id);
+        users.push(member.user);
+      }
+    }
+  }
+
+  return users;
+}
+
+// ===== BALANCE HELPERS =====
 async function addBalance(userId, amount) {
   console.log(`💰 addBalance: userId=${userId}, amount=${amount}`);
   const userIdStr = userId.toString();
@@ -146,11 +212,11 @@ async function getBalance(userId) {
 
 // ===== CURRENCY CONFIG =====
 const CURRENCIES = {
-  BTC:  { emoji: "₿",  name: "Bitcoin",       color: 0xF7931A },
-  LTC:  { emoji: "Ł",  name: "Litecoin",       color: 0xBFBBBB },
-  ETH:  { emoji: "Ξ",  name: "Ethereum",       color: 0x627EEA },
-  USDT: { emoji: "₮",  name: "Tether (TRC20)", color: 0x26A17B },
-  SOL:  { emoji: "◎",  name: "Solana",         color: 0x9945FF }
+  BTC:  { emoji: "₿", name: "Bitcoin",       color: 0xF7931A },
+  LTC:  { emoji: "Ł", name: "Litecoin",       color: 0xBFBBBB },
+  ETH:  { emoji: "Ξ", name: "Ethereum",       color: 0x627EEA },
+  USDT: { emoji: "₮", name: "Tether (TRC20)", color: 0x26A17B },
+  SOL:  { emoji: "◎", name: "Solana",         color: 0x9945FF }
 };
 
 // ===== CREATE PAYMENT =====
@@ -158,26 +224,25 @@ async function createPayment(userId, amount, currency) {
   const response = await axios.post(
     "https://api.nowpayments.io/v1/payment",
     {
-      price_amount: amount,
-      price_currency: "USD",
-      pay_currency: currency,
-      order_id: userId,
+      price_amount:     amount,
+      price_currency:   "USD",
+      pay_currency:     currency,
+      order_id:         userId,
       ipn_callback_url: WEBHOOK_URL
     },
-    {
-      headers: { "x-api-key": NOWPAYMENTS_API_KEY, "Content-Type": "application/json" }
-    }
+    { headers: { "x-api-key": NOWPAYMENTS_API_KEY, "Content-Type": "application/json" } }
   );
   return response.data;
 }
 
 // ===== DESIGN CONSTANTS =====
-const BRAND_COLOR    = 0x5865F2; // Discord blurple
-const SUCCESS_COLOR  = 0x2ECC71;
-const WARNING_COLOR  = 0xF1C40F;
-const ERROR_COLOR    = 0xE74C3C;
-const NEUTRAL_COLOR  = 0x99AAB5;
-const OWNER_COLOR    = 0xE67E22;
+const BRAND_COLOR   = 0x5865F2;
+const SUCCESS_COLOR = 0x2ECC71;
+const WARNING_COLOR = 0xF1C40F;
+const ERROR_COLOR   = 0xE74C3C;
+const NEUTRAL_COLOR = 0x99AAB5;
+const ADMIN_COLOR   = 0xE67E22;
+const PLUS_COLOR    = 0xA855F7; // purple for Pay Access+ notifications
 
 const FOOTER_TEXT = "⚡ Powered by NOWPayments • Instant Crypto Processing";
 
@@ -196,7 +261,7 @@ function buildMainMenuEmbed() {
         inline: true
       },
       {
-        name: "🔧  Admin",
+        name: "🔧  Staff",
         value: "`/forceadd` — Add balance to a user\n`/help` — Show this menu",
         inline: true
       },
@@ -205,6 +270,13 @@ function buildMainMenuEmbed() {
         value: Object.entries(CURRENCIES)
           .map(([code, c]) => `${c.emoji} **${code}** — ${c.name}`)
           .join("\n"),
+        inline: false
+      },
+      {
+        name: "🔑  Access Roles",
+        value:
+          `**${ROLE_ACCESS}** — Can use \`/forceadd\`\n` +
+          `**${ROLE_ACCESS_PLUS}** — \`/forceadd\` + receives payment notifications`,
         inline: false
       }
     )
@@ -224,21 +296,9 @@ function buildBalanceEmbed(userId, balance, username) {
     .setTitle("💰  Wallet Balance")
     .setDescription(`Account **@${username}** • ${tier}`)
     .addFields(
-      {
-        name: "📊 Available Balance",
-        value: `## \`${balance.toFixed(2)} USD\``,
-        inline: false
-      },
-      {
-        name: "🆔 User ID",
-        value: `\`${userId}\``,
-        inline: true
-      },
-      {
-        name: "💡 Top Up",
-        value: "Use `/pay` to add funds",
-        inline: true
-      }
+      { name: "📊 Available Balance", value: `## \`${balance.toFixed(2)} USD\``, inline: false },
+      { name: "🆔 User ID",           value: `\`${userId}\``,                    inline: true  },
+      { name: "💡 Top Up",            value: "Use `/pay` to add funds",           inline: true  }
     )
     .setColor(balance > 0 ? SUCCESS_COLOR : NEUTRAL_COLOR)
     .setFooter({ text: FOOTER_TEXT })
@@ -260,16 +320,8 @@ function buildPaymentEmbed(payment, currency) {
           ? `\`\`\`\n${payment.pay_address}\n\`\`\``
           : "`Address pending...`"
       },
-      {
-        name: "💸  Amount",
-        value: `\`${payment.pay_amount} ${payment.pay_currency}\``,
-        inline: true
-      },
-      {
-        name: "💵  USD Value",
-        value: `\`${payment.price_amount} USD\``,
-        inline: true
-      },
+      { name: "💸  Amount",    value: `\`${payment.pay_amount} ${payment.pay_currency}\``, inline: true },
+      { name: "💵  USD Value", value: `\`${payment.price_amount} USD\``,                   inline: true },
       {
         name: "⏱️  Expires",
         value: payment.expiration_estimate_date
@@ -277,11 +329,7 @@ function buildPaymentEmbed(payment, currency) {
           : "`~20 minutes`",
         inline: true
       },
-      {
-        name: "🔑  Payment ID",
-        value: `\`${payment.payment_id}\``,
-        inline: false
-      }
+      { name: "🔑  Payment ID", value: `\`${payment.payment_id}\``, inline: false }
     )
     .setColor(cur.color)
     .setFooter({ text: "📬 You'll receive a DM when payment is confirmed" })
@@ -291,70 +339,65 @@ function buildPaymentEmbed(payment, currency) {
 function buildForceAddEmbed(targetUser, amount, newBalance, executedBy) {
   return new EmbedBuilder()
     .setTitle("🔧  Manual Balance Credit")
-    .setDescription(`Balance added to **@${targetUser.username}** by **@${executedBy.username}**`)
+    .setDescription(`Balance credited to **@${targetUser.username}** by **@${executedBy.username}**`)
     .addFields(
-      {
-        name: "➕  Amount Added",
-        value: `\`+${amount.toFixed(2)} USD\``,
-        inline: true
-      },
-      {
-        name: "💰  New Balance",
-        value: `\`${newBalance.toFixed(2)} USD\``,
-        inline: true
-      },
-      {
-        name: "🎯  Target User",
-        value: `<@${targetUser.id}> (\`${targetUser.id}\`)`,
-        inline: false
-      }
+      { name: "➕  Amount Added", value: `\`+${amount.toFixed(2)} USD\``,    inline: true  },
+      { name: "💰  New Balance",  value: `\`${newBalance.toFixed(2)} USD\``,  inline: true  },
+      { name: "🎯  Target User",  value: `<@${targetUser.id}> (\`${targetUser.id}\`)`, inline: false }
     )
-    .setColor(OWNER_COLOR)
+    .setColor(ADMIN_COLOR)
     .setFooter({ text: `Executed by ${executedBy.tag} • ${FOOTER_TEXT}` })
+    .setTimestamp();
+}
+
+/** Sent to Pay Access+ holders when someone's payment finishes */
+function buildPaymentNotifyEmbed(payerUser, amount, newBalance, paymentId) {
+  return new EmbedBuilder()
+    .setTitle("🔔  Payment Notification")
+    .setDescription(
+      `A user has successfully completed a payment.\n` +
+      `> Sent to all **${ROLE_ACCESS_PLUS}** members.`
+    )
+    .addFields(
+      { name: "👤  User",          value: `<@${payerUser.id}> (\`${payerUser.tag}\`)`, inline: false },
+      { name: "💵  Amount Paid",   value: `\`${amount.toFixed(2)} USD\``,              inline: true  },
+      { name: "💰  Their Balance", value: `\`${newBalance.toFixed(2)} USD\``,          inline: true  },
+      { name: "🔑  Payment ID",    value: `\`${paymentId}\``,                          inline: false }
+    )
+    .setColor(PLUS_COLOR)
+    .setFooter({ text: `${ROLE_ACCESS_PLUS} Alert • ${FOOTER_TEXT}` })
     .setTimestamp();
 }
 
 // ===== STATUS CONFIG =====
 const STATUS_CONFIG = {
   waiting: {
-    color: WARNING_COLOR,
-    icon: "⏳",
-    title: "Awaiting Payment",
+    color: WARNING_COLOR, icon: "⏳", title: "Awaiting Payment",
     desc: "> Your payment has been created. Send the exact amount to proceed."
   },
   confirming: {
-    color: BRAND_COLOR,
-    icon: "🔄",
-    title: "Confirming Transaction",
+    color: BRAND_COLOR, icon: "🔄", title: "Confirming Transaction",
     desc: "> Your payment has been detected on the network and is being confirmed."
   },
   confirmed: {
-    color: 0x1ABC9C,
-    icon: "💚",
-    title: "Transaction Confirmed",
+    color: 0x1ABC9C, icon: "💚", title: "Transaction Confirmed",
     desc: "> Your payment is confirmed. Waiting for final processing."
   },
   finished: {
-    color: SUCCESS_COLOR,
-    icon: "✅",
-    title: "Payment Complete!",
+    color: SUCCESS_COLOR, icon: "✅", title: "Payment Complete!",
     desc: "> Your balance has been successfully topped up. Enjoy!"
   },
   failed: {
-    color: ERROR_COLOR,
-    icon: "❌",
-    title: "Payment Failed",
+    color: ERROR_COLOR, icon: "❌", title: "Payment Failed",
     desc: "> Your payment could not be processed. Please try again with `/pay`."
   },
   expired: {
-    color: NEUTRAL_COLOR,
-    icon: "💀",
-    title: "Payment Expired",
+    color: NEUTRAL_COLOR, icon: "💀", title: "Payment Expired",
     desc: "> This invoice has expired. Please create a new payment with `/pay`."
   }
 };
 
-// ===== CURRENCY SELECT MENU =====
+// ===== UI BUILDERS =====
 function buildCurrencyMenu(customId = "select_currency") {
   const options = Object.entries(CURRENCIES).map(([code, info]) =>
     new StringSelectMenuOptionBuilder()
@@ -363,15 +406,14 @@ function buildCurrencyMenu(customId = "select_currency") {
       .setValue(code)
   );
 
-  const menu = new StringSelectMenuBuilder()
-    .setCustomId(customId)
-    .setPlaceholder("🪙  Select a cryptocurrency...")
-    .addOptions(options);
-
-  return new ActionRowBuilder().addComponents(menu);
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(customId)
+      .setPlaceholder("🪙  Select a cryptocurrency...")
+      .addOptions(options)
+  );
 }
 
-// ===== AMOUNT BUTTONS =====
 function buildAmountRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("amt_5").setLabel("$5").setStyle(ButtonStyle.Secondary),
@@ -382,10 +424,10 @@ function buildAmountRow() {
   );
 }
 
-// ===== PENDING PAYMENTS MAP =====
+// ===== PENDING PAYMENTS =====
 const pendingPayments = new Map();
 
-// ===== SLASH COMMAND HANDLER =====
+// ===== INTERACTION HANDLER =====
 client.on("interactionCreate", async (interaction) => {
 
   // ──────────── SLASH COMMANDS ────────────
@@ -394,19 +436,20 @@ client.on("interactionCreate", async (interaction) => {
 
     // /help
     if (commandName === "help") {
-      const embed = buildMainMenuEmbed();
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId("btn_pay").setLabel("💳  Top Up").setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId("btn_balance").setLabel("💰  Balance").setStyle(ButtonStyle.Primary)
       );
-      return interaction.reply({ embeds: [embed], components: [row], ephemeral: true });
+      return interaction.reply({ embeds: [buildMainMenuEmbed()], components: [row], ephemeral: true });
     }
 
     // /balance
     if (commandName === "balance") {
       const balance = await getBalance(interaction.user.id);
-      const embed = buildBalanceEmbed(interaction.user.id, balance, interaction.user.username);
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      return interaction.reply({
+        embeds: [buildBalanceEmbed(interaction.user.id, balance, interaction.user.username)],
+        ephemeral: true
+      });
     }
 
     // /pay
@@ -416,19 +459,27 @@ client.on("interactionCreate", async (interaction) => {
         .setDescription("**Step 1 / 2** — Choose the cryptocurrency you'd like to pay with.")
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT });
-      return interaction.reply({ embeds: [embed], components: [buildCurrencyMenu("pay_currency")], ephemeral: true });
+      return interaction.reply({
+        embeds: [embed],
+        components: [buildCurrencyMenu("pay_currency")],
+        ephemeral: true
+      });
     }
 
-    // /forceadd
+    // /forceadd — requires Pay Access or Pay Access+
     if (commandName === "forceadd") {
-      // Owner-only guard
-      if (interaction.user.id !== OWNER_ID) {
+      const tier = await getAccessTier(interaction.user.id);
+
+      if (!tier) {
         return interaction.reply({
           embeds: [
             new EmbedBuilder()
               .setTitle("⛔  Access Denied")
-              .setDescription("This command is restricted to the **bot owner** only.")
+              .setDescription(
+                `This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`
+              )
               .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
           ],
           ephemeral: true
         });
@@ -465,16 +516,17 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      const embed = buildForceAddEmbed(targetUser, amount, newBalance, interaction.user);
-      await interaction.editReply({ embeds: [embed] });
+      await interaction.editReply({
+        embeds: [buildForceAddEmbed(targetUser, amount, newBalance, interaction.user)]
+      });
 
-      // Notify the target user via DM
+      // DM the credited user
       try {
         const dmEmbed = new EmbedBuilder()
           .setTitle("🎉  Balance Added!")
           .setDescription(`An administrator has added **${amount.toFixed(2)} USD** to your account.`)
           .addFields(
-            { name: "➕ Added", value: `\`+${amount.toFixed(2)} USD\``, inline: true },
+            { name: "➕ Added",       value: `\`+${amount.toFixed(2)} USD\``,    inline: true },
             { name: "💰 New Balance", value: `\`${newBalance.toFixed(2)} USD\``, inline: true }
           )
           .setColor(SUCCESS_COLOR)
@@ -497,13 +549,19 @@ client.on("interactionCreate", async (interaction) => {
         .setDescription("**Step 1 / 2** — Choose the cryptocurrency you'd like to pay with.")
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT });
-      return interaction.reply({ embeds: [embed], components: [buildCurrencyMenu("pay_currency")], ephemeral: true });
+      return interaction.reply({
+        embeds: [embed],
+        components: [buildCurrencyMenu("pay_currency")],
+        ephemeral: true
+      });
     }
 
     if (interaction.customId === "btn_balance") {
       const balance = await getBalance(interaction.user.id);
-      const embed = buildBalanceEmbed(interaction.user.id, balance, interaction.user.username);
-      return interaction.reply({ embeds: [embed], ephemeral: true });
+      return interaction.reply({
+        embeds: [buildBalanceEmbed(interaction.user.id, balance, interaction.user.username)],
+        ephemeral: true
+      });
     }
 
     if (interaction.customId.startsWith("amt_")) {
@@ -535,8 +593,8 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.showModal(modal);
       }
 
-      const amount    = parseFloat(interaction.customId.replace("amt_", ""));
-      pending.amount  = amount;
+      const amount   = parseFloat(interaction.customId.replace("amt_", ""));
+      pending.amount = amount;
       pendingPayments.set(userId, pending);
 
       await interaction.deferReply({ ephemeral: true });
@@ -576,8 +634,7 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    const rawAmount = interaction.fields.getTextInputValue("custom_amount_input");
-    const amount    = parseFloat(rawAmount);
+    const amount = parseFloat(interaction.fields.getTextInputValue("custom_amount_input"));
 
     if (isNaN(amount) || amount < 1 || amount > 1000) {
       return interaction.reply({
@@ -598,13 +655,12 @@ client.on("interactionCreate", async (interaction) => {
   }
 });
 
-// ===== LEGACY TEXT COMMANDS (fallback) =====
+// ===== LEGACY TEXT COMMAND /test (owner debug only) =====
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
   const args = message.content.trim().split(/\s+/);
   const cmd  = args[0].toLowerCase();
 
-  // /test — owner debug via text command
   if (cmd === "/test") {
     if (message.author.id !== OWNER_ID)
       return message.reply("⛔ Owner only.");
@@ -620,7 +676,7 @@ client.on("messageCreate", async (message) => {
       .setTitle("🧪  Debug — Test Balance")
       .setColor(success ? SUCCESS_COLOR : ERROR_COLOR)
       .addFields(
-        { name: "Added",       value: `\`+${amount} USD\``,         inline: true },
+        { name: "Added",       value: `\`+${amount} USD\``,              inline: true },
         { name: "New Balance", value: `\`${newBalance.toFixed(2)} USD\``, inline: true }
       );
 
@@ -629,7 +685,7 @@ client.on("messageCreate", async (message) => {
   }
 });
 
-// ===== PROCESS PAYMENT =====
+// ===== PROCESS PAYMENT (from /pay flow) =====
 async function processPayment(interaction, userId, amount, currency) {
   try {
     const payment = await createPayment(userId, amount, currency);
@@ -690,7 +746,14 @@ app.post("/webhook", async (req, res) => {
     return res.status(401).send("Invalid signature");
   }
 
-  const { payment_status: status, order_id: userId, price_amount, pay_currency, payment_id } = req.body;
+  const {
+    payment_status: status,
+    order_id:       userId,
+    price_amount,
+    pay_currency,
+    payment_id
+  } = req.body;
+
   const amount = parseFloat(price_amount || 0);
   console.log(`🔔 Webhook: status=${status}, userId=${userId}, amount=${amount}`);
 
@@ -698,6 +761,7 @@ app.post("/webhook", async (req, res) => {
     const cfg = STATUS_CONFIG[status];
     if (!cfg) return res.sendStatus(200);
 
+    // Build status embed for the payer
     const embed = new EmbedBuilder()
       .setTitle(`${cfg.icon}  ${cfg.title}`)
       .setDescription(cfg.desc)
@@ -710,24 +774,53 @@ app.post("/webhook", async (req, res) => {
       const newBalance = await getBalance(userId);
 
       embed.addFields(
-        { name: "➕ Amount Added",  value: `\`+${amount.toFixed(2)} USD\``,   inline: true },
-        { name: "💰 New Balance",   value: `\`${newBalance.toFixed(2)} USD\``, inline: true }
+        { name: "➕ Amount Added", value: `\`+${amount.toFixed(2)} USD\``,    inline: true },
+        { name: "💰 New Balance",  value: `\`${newBalance.toFixed(2)} USD\``, inline: true }
       );
 
       if (!success) {
         embed.setColor(ERROR_COLOR)
              .setTitle("⚠️  Payment OK — Balance Update Failed")
-             .setDescription("Payment was received but balance update failed. Contact support.");
+             .setDescription("Payment received but balance update failed. Contact support.");
       }
-    } else if (["waiting", "confirming", "confirmed"].includes(status)) {
-      embed.addFields(
-        { name: "💵 Amount",   value: `\`${amount} USD\``,  inline: true },
-        { name: "🪙 Currency", value: `\`${pay_currency}\``, inline: true }
-      );
+
+      // DM the payer
+      const payerUser = await client.users.fetch(userId).catch(() => null);
+      if (payerUser) {
+        await payerUser.send({ embeds: [embed] }).catch(() => {});
+      }
+
+      // ── Notify all Pay Access+ members ──
+      if (success && payerUser) {
+        const notifyEmbed = buildPaymentNotifyEmbed(payerUser, amount, newBalance, payment_id);
+        const plusUsers   = await getAccessPlusUsers();
+
+        let notified = 0;
+        for (const user of plusUsers) {
+          if (user.id === userId) continue; // don't DM the payer themselves
+          try {
+            await user.send({ embeds: [notifyEmbed] });
+            notified++;
+          } catch {
+            console.log(`⚠️ Could not DM Pay Access+ user ${user.tag}`);
+          }
+        }
+        console.log(`📣 Notified ${notified} Pay Access+ member(s) about payment by ${payerUser.tag}`);
+      }
+
+    } else {
+      // non-finished statuses: just DM the payer
+      if (["waiting", "confirming", "confirmed"].includes(status)) {
+        embed.addFields(
+          { name: "💵 Amount",   value: `\`${amount} USD\``,  inline: true },
+          { name: "🪙 Currency", value: `\`${pay_currency}\``, inline: true }
+        );
+      }
+
+      const user = await client.users.fetch(userId).catch(() => null);
+      if (user) await user.send({ embeds: [embed] }).catch(() => {});
     }
 
-    const user = await client.users.fetch(userId).catch(() => null);
-    if (user) await user.send({ embeds: [embed] });
   } catch (err) {
     console.error("❌ Webhook processing error:", err.message);
   }
