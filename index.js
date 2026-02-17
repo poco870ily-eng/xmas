@@ -1,8 +1,8 @@
 import { Client, GatewayIntentBits, EmbedBuilder } from "discord.js";
 import express from "express";
 import axios from "axios";
-import sqlite3 from "sqlite3";
 import crypto from "crypto";
+import { createClient } from "@supabase/supabase-js";
 
 // ===== ENV =====
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
@@ -11,28 +11,11 @@ const IPN_SECRET = process.env.IPN_SECRET;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const PORT = process.env.PORT || 3000;
 
-// ===== DATABASE =====
-const db = new sqlite3.Database("./database.db");
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
-db.run(`
-CREATE TABLE IF NOT EXISTS users (
-    user_id TEXT PRIMARY KEY,
-    balance REAL DEFAULT 0
-)
-`);
-
-function addBalance(userId, amount) {
-  db.run(`INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)`, [userId]);
-  db.run(`UPDATE users SET balance = balance + ? WHERE user_id = ?`, [amount, userId]);
-}
-
-function getBalance(userId) {
-  return new Promise((resolve) => {
-    db.get(`SELECT balance FROM users WHERE user_id = ?`, [userId], (err, row) => {
-      resolve(row ? row.balance : 0);
-    });
-  });
-}
+// ===== SUPABASE CLIENT =====
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ===== DISCORD BOT =====
 const client = new Client({
@@ -47,26 +30,52 @@ client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
   client.user.setPresence({
-    activities: [{ name: "Crypto payments 💰" }],
+    activities: [{ name: "Crypto Payments 💰" }],
     status: "online"
   });
 });
 
+// ===== HELPERS =====
+async function addBalance(userId, amount) {
+  const { data, error } = await supabase
+    .from("users")
+    .select("balance")
+    .eq("user_id", userId)
+    .single();
+
+  let newBalance = amount;
+  if (data) newBalance += parseFloat(data.balance);
+
+  await supabase
+    .from("users")
+    .upsert({ user_id: userId, balance: newBalance });
+}
+
+async function getBalance(userId) {
+  const { data } = await supabase
+    .from("users")
+    .select("balance")
+    .eq("user_id", userId)
+    .single();
+
+  return data ? parseFloat(data.balance) : 0;
+}
+
+// ===== DISCORD COMMANDS =====
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  // ===== /pay =====
   if (message.content.startsWith("/pay")) {
     const args = message.content.split(" ");
     const amount = parseFloat(args[1]);
-    const cryptoCurrency = args[2]?.toUpperCase(); // FIXED
+    const cryptoCurrency = args[2]?.toUpperCase();
 
     if (!amount || !cryptoCurrency) {
-      return message.reply("Используй: `/pay 10 BTC` или `/pay 10 LTC`");
+      return message.reply("Use: `/pay 10 BTC` or `/pay 10 LTC`");
     }
 
     if (!["BTC", "LTC"].includes(cryptoCurrency)) {
-      return message.reply("Доступно только: BTC или LTC");
+      return message.reply("Available currencies: BTC or LTC");
     }
 
     try {
@@ -74,7 +83,7 @@ client.on("messageCreate", async (message) => {
         "https://api.nowpayments.io/v1/payment",
         {
           price_amount: amount,
-          price_currency: "usd",
+          price_currency: "USD",
           pay_currency: cryptoCurrency,
           order_id: message.author.id,
           ipn_callback_url: WEBHOOK_URL
@@ -90,49 +99,41 @@ client.on("messageCreate", async (message) => {
       const payment = response.data;
       console.log("Payment response:", payment);
 
+      const payLink = payment.invoice_url || `https://nowpayments.io/payment/?iid=${payment.payment_id}`;
+
       const embed = new EmbedBuilder()
-        .setTitle("💰 Инструкция для оплаты")
+        .setTitle("💰 Payment Instructions")
         .setColor("#FFD700")
         .addFields(
-          { name: "Сумма", value: `${payment.price_amount} USD`, inline: true },
-          { name: "К оплате", value: `${payment.pay_amount} ${payment.pay_currency}`, inline: true },
+          { name: "Amount", value: `${payment.price_amount} USD`, inline: true },
+          { name: "To Pay", value: `${payment.pay_amount} ${payment.pay_currency}`, inline: true },
           {
-            name: "Адрес",
-            value: payment.pay_address
-              ? `\`${payment.pay_address}\``
-              : "Используйте ссылку ниже",
+            name: "Payment Address",
+            value: payment.pay_address ? `\`${payment.pay_address}\`` : "Use Pay Link below"
           },
+          { name: "Pay Link", value: `[Click Here to Pay](${payLink})` },
+          { name: "Status", value: payment.payment_status || "waiting", inline: true },
           {
-            name: "Ссылка для оплаты",
-            value: payment.invoice_url || "Нет ссылки"
-          },
-          {
-            name: "Статус",
-            value: payment.payment_status || "waiting",
-            inline: true
-          },
-          {
-            name: "Действителен до",
+            name: "Expires At",
             value: payment.expiration_estimate_date
               ? new Date(payment.expiration_estimate_date).toLocaleString()
-              : "Не указано",
+              : "Not specified",
             inline: true
           }
         )
         .setTimestamp();
 
       await message.author.send({ embeds: [embed] });
-      message.reply("📬 Инструкция отправлена в ЛС!");
+      message.reply("📬 Payment details sent to your DM!");
     } catch (err) {
       console.log("NOWPayments error:", err.response?.data || err.message);
-      message.reply("❌ Ошибка создания платежа.");
+      message.reply("❌ Failed to create payment.");
     }
   }
 
-  // ===== /balance =====
   if (message.content === "/balance") {
     const bal = await getBalance(message.author.id);
-    message.reply(`💳 Ваш баланс: ${bal} USD`);
+    message.reply(`💳 Your balance: ${bal} USD`);
   }
 });
 
@@ -150,10 +151,7 @@ function verifyIPN(req) {
 const app = express();
 app.use(express.json());
 
-// Чтобы Render не засыпал
-app.get("/", (req, res) => {
-  res.send("Bot is alive ✅");
-});
+app.get("/", (req, res) => res.send("Bot is alive ✅"));
 
 app.post("/webhook", async (req, res) => {
   console.log("Webhook received:", req.body);
@@ -168,47 +166,33 @@ app.post("/webhook", async (req, res) => {
   const userId = data.order_id;
   const amount = parseFloat(data.price_amount || 0);
 
-  console.log("STATUS:", status);
-
   try {
     const user = await client.users.fetch(userId);
 
-    if (status === "waiting") {
-      await user.send("⏳ Платёж создан. Ожидаем перевод...");
-    }
-
-    if (status === "confirming") {
-      await user.send("🔄 Платёж получен. Ожидаем подтверждений сети...");
-    }
-
-    if (status === "confirmed") {
-      await user.send("💰 Платёж подтверждён сетью.");
-    }
-
+    if (status === "waiting") await user.send("⏳ Payment created. Waiting for transfer...");
+    if (status === "confirming") await user.send("🔄 Payment received. Waiting for blockchain confirmations...");
+    if (status === "confirmed") await user.send("💰 Payment confirmed by network.");
     if (status === "finished") {
-      addBalance(userId, amount);
+      await addBalance(userId, amount);
 
       const embed = new EmbedBuilder()
-        .setTitle("✅ Платёж завершён")
+        .setTitle("✅ Payment Completed")
         .setColor("#00FF00")
         .addFields(
-          { name: "Сумма", value: `${amount} USD`, inline: true },
-          { name: "Баланс обновлён", value: "Проверь через /balance" }
+          { name: "Amount", value: `${amount} USD`, inline: true },
+          { name: "Balance Updated", value: "Check using /balance" }
         )
         .setTimestamp();
 
       await user.send({ embeds: [embed] });
     }
-
   } catch (err) {
-    console.log("Ошибка отправки ЛС:", err.message);
+    console.log("DM error:", err.message);
   }
 
   res.sendStatus(200);
 });
 
-app.listen(PORT, () => {
-  console.log("🌐 Webhook server running on port", PORT);
-});
+app.listen(PORT, () => console.log("🌐 Webhook server running on port", PORT));
 
 client.login(DISCORD_TOKEN);
