@@ -44,6 +44,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,   // ← нужен для чтения ролей участников
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages
   ]
@@ -165,6 +166,12 @@ async function getAccessPlusUsers() {
   const users = [];
 
   for (const [, guild] of client.guilds.cache) {
+    try {
+      await guild.members.fetch();
+    } catch {
+      continue;
+    }
+
     const role = guild.roles.cache.find(
       r => r.name.toLowerCase() === ROLE_ACCESS_PLUS.toLowerCase()
     );
@@ -501,7 +508,14 @@ client.on("interactionCreate", async (interaction) => {
       const seen       = new Set();
 
       for (const [, guild] of client.guilds.cache) {
-        // Find roles by name (no heavy member fetch needed)
+        // Fetch all members fresh (fills the cache so role.members works)
+        try {
+          await guild.members.fetch();
+        } catch (e) {
+          console.error(`❌ Could not fetch members for guild ${guild.name}:`, e.message);
+          continue;
+        }
+
         const roleBasic = guild.roles.cache.find(
           r => r.name.toLowerCase() === ROLE_ACCESS.toLowerCase()
         );
@@ -509,7 +523,8 @@ client.on("interactionCreate", async (interaction) => {
           r => r.name.toLowerCase() === ROLE_ACCESS_PLUS.toLowerCase()
         );
 
-        // Pay Access+ members
+        console.log(`🔍 Guild: ${guild.name} | Role Basic: ${roleBasic?.name ?? "NOT FOUND"} (${roleBasic?.members.size ?? 0} members) | Role Plus: ${rolePlus?.name ?? "NOT FOUND"} (${rolePlus?.members.size ?? 0} members)`);
+
         if (rolePlus) {
           for (const [, member] of rolePlus.members) {
             if (seen.has(member.id)) continue;
@@ -518,7 +533,6 @@ client.on("interactionCreate", async (interaction) => {
           }
         }
 
-        // Pay Access members (exclude those already counted as Plus)
         if (roleBasic) {
           for (const [, member] of roleBasic.members) {
             if (seen.has(member.id)) continue;
