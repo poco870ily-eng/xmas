@@ -64,6 +64,11 @@ const SLASH_COMMANDS = [
     description: "📖 Show all available commands"
   },
   {
+    name: "viewadmins",
+    description: "🔍 [Owner] Debug — list all users with Pay Access / Pay Access+ roles",
+    default_member_permissions: "0"
+  },
+  {
     name: "forceadd",
     description: "🔧 [Pay Access] Manually add balance to a user",
     default_member_permissions: "0", // visible to everyone, access checked via role in code
@@ -477,6 +482,75 @@ client.on("interactionCreate", async (interaction) => {
         components: [buildCurrencyMenu("pay_currency")],
         ephemeral: true
       });
+    }
+
+    // /viewadmins — owner-only debug command
+    if (commandName === "viewadmins") {
+      if (interaction.user.id !== OWNER_ID) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription("This debug command is restricted to the **bot owner** only.")
+              .setColor(ERROR_COLOR)
+          ],
+          ephemeral: true
+        });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+
+      const basicUsers = [];
+      const plusUsers  = [];
+      const seen       = new Set();
+
+      for (const [, guild] of client.guilds.cache) {
+        let members;
+        try { members = await guild.members.fetch(); } catch { continue; }
+
+        for (const [, member] of members) {
+          if (seen.has(member.id)) continue;
+          const hasPlus  = memberHasRole(member, ROLE_ACCESS_PLUS);
+          const hasBasic = memberHasRole(member, ROLE_ACCESS);
+          if (hasPlus) {
+            seen.add(member.id);
+            plusUsers.push({ tag: member.user.tag, id: member.id });
+          } else if (hasBasic) {
+            seen.add(member.id);
+            basicUsers.push({ tag: member.user.tag, id: member.id });
+          }
+        }
+      }
+
+      const formatList = (arr) =>
+        arr.length > 0
+          ? arr.map(u => `<@${u.id}> — \`${u.tag}\` (\`${u.id}\`)`).join("\n")
+          : "`— None found —`";
+
+      const embed = new EmbedBuilder()
+        .setTitle("🔍  Debug — Access Role Members")
+        .setDescription(
+          `Scanned **${client.guilds.cache.size}** guild(s).
+` +
+          `Total found: **${basicUsers.length + plusUsers.length}** user(s).`
+        )
+        .addFields(
+          {
+            name: `🔑  ${ROLE_ACCESS} (${basicUsers.length})`,
+            value: formatList(basicUsers),
+            inline: false
+          },
+          {
+            name: `👑  ${ROLE_ACCESS_PLUS} (${plusUsers.length})`,
+            value: formatList(plusUsers),
+            inline: false
+          }
+        )
+        .setColor(0x3498DB)
+        .setFooter({ text: `Owner debug • ${FOOTER_TEXT}` })
+        .setTimestamp();
+
+      return interaction.editReply({ embeds: [embed] });
     }
 
     // /forceadd — requires Pay Access or Pay Access+
