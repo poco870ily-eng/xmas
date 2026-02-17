@@ -22,26 +22,15 @@ CREATE TABLE IF NOT EXISTS users (
 `);
 
 function addBalance(userId, amount) {
-  db.run(
-    `INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)`,
-    [userId]
-  );
-
-  db.run(
-    `UPDATE users SET balance = balance + ? WHERE user_id = ?`,
-    [amount, userId]
-  );
+  db.run(`INSERT OR IGNORE INTO users (user_id, balance) VALUES (?, 0)`, [userId]);
+  db.run(`UPDATE users SET balance = balance + ? WHERE user_id = ?`, [amount, userId]);
 }
 
 function getBalance(userId) {
   return new Promise((resolve) => {
-    db.get(
-      `SELECT balance FROM users WHERE user_id = ?`,
-      [userId],
-      (err, row) => {
-        resolve(row ? row.balance : 0);
-      }
-    );
+    db.get(`SELECT balance FROM users WHERE user_id = ?`, [userId], (err, row) => {
+      resolve(row ? row.balance : 0);
+    });
   });
 }
 
@@ -56,6 +45,11 @@ const client = new Client({
 
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
+
+  client.user.setPresence({
+    activities: [{ name: "Crypto payments 💰" }],
+    status: "online"
+  });
 });
 
 client.on("messageCreate", async (message) => {
@@ -65,14 +59,14 @@ client.on("messageCreate", async (message) => {
   if (message.content.startsWith("/pay")) {
     const args = message.content.split(" ");
     const amount = parseFloat(args[1]);
-    const cryptoCurrency = args[2]?.toLowerCase();
+    const cryptoCurrency = args[2]?.toUpperCase(); // FIXED
 
     if (!amount || !cryptoCurrency) {
-      return message.reply("Используй: `/pay 10 btc` или `/pay 10 ltc`");
+      return message.reply("Используй: `/pay 10 BTC` или `/pay 10 LTC`");
     }
 
-    if (cryptoCurrency !== "btc" && cryptoCurrency !== "ltc") {
-      return message.reply("Доступно только: btc или ltc");
+    if (!["BTC", "LTC"].includes(cryptoCurrency)) {
+      return message.reply("Доступно только: BTC или LTC");
     }
 
     try {
@@ -94,18 +88,34 @@ client.on("messageCreate", async (message) => {
       );
 
       const payment = response.data;
+      console.log("Payment response:", payment);
 
       const embed = new EmbedBuilder()
         .setTitle("💰 Инструкция для оплаты")
         .setColor("#FFD700")
         .addFields(
           { name: "Сумма", value: `${payment.price_amount} USD`, inline: true },
-          { name: "К оплате", value: `${payment.pay_amount} ${payment.pay_currency.toUpperCase()}`, inline: true },
-          { name: "Адрес", value: `\`${payment.pay_address}\`` },
-          { name: "Статус", value: "Ожидание оплаты ⏳", inline: true },
+          { name: "К оплате", value: `${payment.pay_amount} ${payment.pay_currency}`, inline: true },
+          {
+            name: "Адрес",
+            value: payment.pay_address
+              ? `\`${payment.pay_address}\``
+              : "Используйте ссылку ниже",
+          },
+          {
+            name: "Ссылка для оплаты",
+            value: payment.invoice_url || "Нет ссылки"
+          },
+          {
+            name: "Статус",
+            value: payment.payment_status || "waiting",
+            inline: true
+          },
           {
             name: "Действителен до",
-            value: new Date(payment.expiration_estimate_date).toLocaleString(),
+            value: payment.expiration_estimate_date
+              ? new Date(payment.expiration_estimate_date).toLocaleString()
+              : "Не указано",
             inline: true
           }
         )
@@ -136,9 +146,14 @@ function verifyIPN(req) {
   return hmac === req.headers["x-nowpayments-sig"];
 }
 
-// ===== WEBHOOK SERVER =====
+// ===== WEB SERVER =====
 const app = express();
 app.use(express.json());
+
+// Чтобы Render не засыпал
+app.get("/", (req, res) => {
+  res.send("Bot is alive ✅");
+});
 
 app.post("/webhook", async (req, res) => {
   console.log("Webhook received:", req.body);
@@ -150,33 +165,43 @@ app.post("/webhook", async (req, res) => {
 
   const data = req.body;
   const status = data.payment_status;
+  const userId = data.order_id;
+  const amount = parseFloat(data.price_amount || 0);
 
   console.log("STATUS:", status);
 
-  if (status === "confirmed" || status === "finished") {
-    const userId = data.order_id;
-    const amount = parseFloat(data.price_amount || 0);
+  try {
+    const user = await client.users.fetch(userId);
 
-    addBalance(userId, amount);
-    console.log(`✅ Баланс ${userId} пополнен на ${amount} USD`);
+    if (status === "waiting") {
+      await user.send("⏳ Платёж создан. Ожидаем перевод...");
+    }
 
-    try {
-      const user = await client.users.fetch(userId);
+    if (status === "confirming") {
+      await user.send("🔄 Платёж получен. Ожидаем подтверждений сети...");
+    }
+
+    if (status === "confirmed") {
+      await user.send("💰 Платёж подтверждён сетью.");
+    }
+
+    if (status === "finished") {
+      addBalance(userId, amount);
 
       const embed = new EmbedBuilder()
-        .setTitle("✅ Платёж получен")
+        .setTitle("✅ Платёж завершён")
         .setColor("#00FF00")
         .addFields(
           { name: "Сумма", value: `${amount} USD`, inline: true },
-          { name: "Статус", value: "Завершено ✅", inline: true },
           { name: "Баланс обновлён", value: "Проверь через /balance" }
         )
         .setTimestamp();
 
       await user.send({ embeds: [embed] });
-    } catch (err) {
-      console.log("Ошибка отправки ЛС:", err.message);
     }
+
+  } catch (err) {
+    console.log("Ошибка отправки ЛС:", err.message);
   }
 
   res.sendStatus(200);
@@ -186,5 +211,4 @@ app.listen(PORT, () => {
   console.log("🌐 Webhook server running on port", PORT);
 });
 
-// ===== START BOT =====
 client.login(DISCORD_TOKEN);
