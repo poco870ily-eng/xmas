@@ -48,17 +48,40 @@ client.once("ready", () => {
 
 // ===== HELPERS =====
 async function addBalance(userId, amount) {
-  const { data } = await supabase
+  console.log(`💰 addBalance called: userId=${userId}, amount=${amount}`);
+
+  // Check if user exists
+  const { data, error: selectError } = await supabase
     .from("users")
     .select("balance")
     .eq("user_id", userId)
     .single();
 
-  const newBalance = data ? parseFloat(data.balance) + amount : amount;
+  console.log(`📊 Current user data:`, data, `Error:`, selectError?.message);
 
-  await supabase
-    .from("users")
-    .upsert({ user_id: userId, balance: newBalance });
+  const currentBalance = data ? parseFloat(data.balance) : 0;
+  const newBalance = currentBalance + amount;
+
+  console.log(`📈 New balance will be: ${newBalance}`);
+
+  if (data) {
+    // User exists — UPDATE
+    const { error: updateError } = await supabase
+      .from("users")
+      .update({ balance: newBalance })
+      .eq("user_id", userId);
+
+    if (updateError) console.error("❌ Update error:", updateError.message);
+    else console.log(`✅ Balance updated to ${newBalance} for userId=${userId}`);
+  } else {
+    // User doesn't exist — INSERT
+    const { error: insertError } = await supabase
+      .from("users")
+      .insert({ user_id: userId, balance: newBalance });
+
+    if (insertError) console.error("❌ Insert error:", insertError.message);
+    else console.log(`✅ User created with balance ${newBalance} for userId=${userId}`);
+  }
 }
 
 async function getBalance(userId) {
@@ -456,6 +479,8 @@ app.post("/webhook", async (req, res) => {
 
   const { payment_status: status, order_id: userId, price_amount, pay_currency, payment_id } = req.body;
   const amount = parseFloat(price_amount || 0);
+
+  console.log(`🔔 Webhook: status=${status}, userId=${userId}, amount=${amount}, paymentId=${payment_id}`);
 
   try {
     const cfg = STATUS_CONFIG[status];
