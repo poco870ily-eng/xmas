@@ -66,6 +66,7 @@ const SLASH_COMMANDS = [
   {
     name: "forceadd",
     description: "🔧 [Pay Access] Manually add balance to a user",
+    default_member_permissions: "0", // visible to everyone, access checked via role in code
     options: [
       {
         name: "user",
@@ -89,11 +90,23 @@ const SLASH_COMMANDS = [
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
+  const GUILD_ID = process.env.GUILD_ID; // ID сервера — команды появятся мгновенно
+
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
   try {
     console.log("🔄 Registering slash commands...");
-    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: SLASH_COMMANDS });
-    console.log("✅ Slash commands registered globally!");
+    if (GUILD_ID) {
+      // Guild commands — мгновенно (рекомендуется)
+      await rest.put(
+        Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+        { body: SLASH_COMMANDS }
+      );
+      console.log(`✅ Slash commands registered for guild ${GUILD_ID}!`);
+    } else {
+      // Global commands — кэшируются до 1 часа
+      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: SLASH_COMMANDS });
+      console.log("✅ Slash commands registered globally!");
+    }
   } catch (err) {
     console.error("❌ Failed to register slash commands:", err);
   }
