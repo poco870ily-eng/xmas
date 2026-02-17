@@ -27,14 +27,21 @@ const IPN_SECRET          = process.env.IPN_SECRET;
 const WEBHOOK_URL         = process.env.WEBHOOK_URL;
 const PORT                = process.env.PORT || 3000;
 const SUPABASE_URL        = process.env.SUPABASE_URL;
-const SUPABASE_KEY        = process.env.SUPABASE_KEY; // service_role key!
+const SUPABASE_KEY        = process.env.SUPABASE_KEY;
 const OWNER_ID            = process.env.OWNER_ID;
 
 // ===== ROLE NAMES =====
-// "Pay Access"  → can use /forceadd
-// "Pay Access+" → can use /forceadd + receives DM when anyone pays successfully
+// ВАЖНО: Эти строки должны совпадать с названиями ролей в Discord СИМВОЛ В СИМВОЛ
+// Если не работает — используй ROLE_IDS ниже вместо имён
 const ROLE_ACCESS      = "Pay Access";
 const ROLE_ACCESS_PLUS = "Pay Access+";
+
+// ===== (ОПЦИОНАЛЬНО) ROLE IDs =====
+// Если проблемы с именами — укажи ID ролей и переключи USE_ROLE_IDS на true
+// ID можно получить: Discord → ПКМ на роль → "Копировать ID" (нужен Developer Mode)
+const USE_ROLE_IDS     = false;
+const ROLE_ID_ACCESS   = process.env.ROLE_ID_ACCESS   || "";   // напр. "123456789012345678"
+const ROLE_ID_ACCESS_PLUS = process.env.ROLE_ID_ACCESS_PLUS || "";
 
 // ===== SUPABASE =====
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -44,7 +51,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildMembers,   // ← нужен для чтения ролей участников
+    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.DirectMessages
   ]
@@ -72,7 +79,7 @@ const SLASH_COMMANDS = [
   {
     name: "forceadd",
     description: "🔧 [Pay Access] Manually add balance to a user",
-    default_member_permissions: "0", // visible to everyone, access checked via role in code
+    default_member_permissions: "0",
     options: [
       {
         name: "user",
@@ -96,20 +103,18 @@ const SLASH_COMMANDS = [
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
-  const GUILD_ID = process.env.GUILD_ID; // ID сервера — команды появятся мгновенно
-
+  const GUILD_ID = process.env.GUILD_ID;
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
+
   try {
     console.log("🔄 Registering slash commands...");
     if (GUILD_ID) {
-      // Guild commands — мгновенно (рекомендуется)
       await rest.put(
         Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
         { body: SLASH_COMMANDS }
       );
       console.log(`✅ Slash commands registered for guild ${GUILD_ID}!`);
     } else {
-      // Global commands — кэшируются до 1 часа
       await rest.put(Routes.applicationCommands(CLIENT_ID), { body: SLASH_COMMANDS });
       console.log("✅ Slash commands registered globally!");
     }
@@ -125,19 +130,31 @@ client.once("ready", async () => {
 
 // ===== ROLE HELPERS =====
 
-/** Check if a GuildMember has a role by name (case-insensitive). */
-function memberHasRole(member, roleName) {
-  return member.roles.cache.some(
-    r => r.name.toLowerCase() === roleName.toLowerCase()
-  );
+/**
+ * Нормализует строку для сравнения: убирает пробелы по краям, приводит к нижнему регистру.
+ * Это защищает от невидимых символов и опечаток в названиях ролей.
+ */
+function normalizeRoleName(name) {
+  return name.trim().toLowerCase();
 }
 
 /**
- * Returns the access tier of a user across all guilds the bot is in.
- * "plus"  → has Pay Access+
- * "basic" → has Pay Access (but not Plus)
- * null    → no access role found
- * OWNER_ID always gets "plus".
+ * Проверяет наличие роли у участника — по ID (надёжнее) или по имени.
+ */
+function memberHasRole(member, roleName, roleId = "") {
+  if (USE_ROLE_IDS && roleId) {
+    return member.roles.cache.has(roleId);
+  }
+  const target = normalizeRoleName(roleName);
+  return member.roles.cache.some(r => normalizeRoleName(r.name) === target);
+}
+
+/**
+ * Возвращает уровень доступа пользователя по всем гильдиям бота.
+ * 
+ * КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ:
+ * Используем guild.members.fetch(userId) с force: true чтобы получить
+ * свежие данные напрямую из API Discord, игнорируя возможно пустой кэш.
  */
 async function getAccessTier(userId) {
   if (userId === OWNER_ID) return "plus";
@@ -145,21 +162,31 @@ async function getAccessTier(userId) {
   for (const [, guild] of client.guilds.cache) {
     let member;
     try {
-      member = await guild.members.fetch(userId);
+      // force: true — обходит кэш, всегда идёт в API Discord
+      // Это главное исправление — без него роли могут не подгрузиться
+      member = await guild.members.fetch({ user: userId, force: true });
     } catch {
-      continue; // user not in this guild
+      continue; // пользователь не в этой гильдии
     }
 
-    if (memberHasRole(member, ROLE_ACCESS_PLUS)) return "plus";
-    if (memberHasRole(member, ROLE_ACCESS))      return "basic";
+    console.log(
+      `[DEBUG getAccessTier] User ${userId} in "${guild.name}" has roles:`,
+      member.roles.cache.map(r => `"${r.name}" (${r.id})`).join(", ") || "none"
+    );
+
+    if (memberHasRole(member, ROLE_ACCESS_PLUS, ROLE_ID_ACCESS_PLUS)) return "plus";
+    if (memberHasRole(member, ROLE_ACCESS,      ROLE_ID_ACCESS))      return "basic";
   }
 
   return null;
 }
 
 /**
- * Fetches all User objects across all guilds who have the Pay Access+ role.
- * Uses role.members (cached) instead of fetching all guild members.
+ * Возвращает всех пользователей с ролью Pay Access+ по всем гильдиям.
+ *
+ * КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ:
+ * Сначала принудительно загружаем всех участников гильдии (force: true),
+ * затем ищем роль и перебираем её members.
  */
 async function getAccessPlusUsers() {
   const seen  = new Set();
@@ -167,15 +194,28 @@ async function getAccessPlusUsers() {
 
   for (const [, guild] of client.guilds.cache) {
     try {
-      await guild.members.fetch();
-    } catch {
+      // Загружаем ВСЕХ участников гильдии свежими данными из API
+      await guild.members.fetch({ force: true });
+    } catch (e) {
+      console.error(`❌ Could not fetch members for guild "${guild.name}":`, e.message);
       continue;
     }
 
-    const role = guild.roles.cache.find(
-      r => r.name.toLowerCase() === ROLE_ACCESS_PLUS.toLowerCase()
-    );
-    if (!role) continue;
+    let role;
+    if (USE_ROLE_IDS && ROLE_ID_ACCESS_PLUS) {
+      role = guild.roles.cache.get(ROLE_ID_ACCESS_PLUS);
+    } else {
+      role = guild.roles.cache.find(
+        r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_ACCESS_PLUS)
+      );
+    }
+
+    if (!role) {
+      console.warn(`⚠️ Role "${ROLE_ACCESS_PLUS}" not found in guild "${guild.name}"`);
+      continue;
+    }
+
+    console.log(`[DEBUG] Guild "${guild.name}" — role "${role.name}" has ${role.members.size} member(s)`);
 
     for (const [, member] of role.members) {
       if (seen.has(member.id)) continue;
@@ -263,7 +303,7 @@ const WARNING_COLOR = 0xF1C40F;
 const ERROR_COLOR   = 0xE74C3C;
 const NEUTRAL_COLOR = 0x99AAB5;
 const ADMIN_COLOR   = 0xE67E22;
-const PLUS_COLOR    = 0xA855F7; // purple for Pay Access+ notifications
+const PLUS_COLOR    = 0xA855F7;
 
 const FOOTER_TEXT = "⚡ Powered by NOWPayments • Instant Crypto Processing";
 
@@ -371,7 +411,6 @@ function buildForceAddEmbed(targetUser, amount, newBalance, executedBy) {
     .setTimestamp();
 }
 
-/** Sent to Pay Access+ holders when someone's payment finishes */
 function buildPaymentNotifyEmbed(payerUser, amount, newBalance, paymentId) {
   return new EmbedBuilder()
     .setTitle("🔔  Payment Notification")
@@ -487,7 +526,7 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // /viewadmins — owner-only debug command
+    // /viewadmins — owner-only debug
     if (commandName === "viewadmins") {
       if (interaction.user.id !== OWNER_ID) {
         return interaction.reply({
@@ -508,22 +547,36 @@ client.on("interactionCreate", async (interaction) => {
       const seen       = new Set();
 
       for (const [, guild] of client.guilds.cache) {
-        // Fetch all members fresh (fills the cache so role.members works)
         try {
-          await guild.members.fetch();
+          // force: true — гарантирует свежий кэш из API
+          await guild.members.fetch({ force: true });
         } catch (e) {
-          console.error(`❌ Could not fetch members for guild ${guild.name}:`, e.message);
+          console.error(`❌ Could not fetch members for guild "${guild.name}":`, e.message);
           continue;
         }
 
-        const roleBasic = guild.roles.cache.find(
-          r => r.name.toLowerCase() === ROLE_ACCESS.toLowerCase()
-        );
-        const rolePlus = guild.roles.cache.find(
-          r => r.name.toLowerCase() === ROLE_ACCESS_PLUS.toLowerCase()
-        );
+        let roleBasic, rolePlus;
 
-        console.log(`🔍 Guild: ${guild.name} | Role Basic: ${roleBasic?.name ?? "NOT FOUND"} (${roleBasic?.members.size ?? 0} members) | Role Plus: ${rolePlus?.name ?? "NOT FOUND"} (${rolePlus?.members.size ?? 0} members)`);
+        if (USE_ROLE_IDS) {
+          roleBasic = ROLE_ID_ACCESS      ? guild.roles.cache.get(ROLE_ID_ACCESS)      : null;
+          rolePlus  = ROLE_ID_ACCESS_PLUS ? guild.roles.cache.get(ROLE_ID_ACCESS_PLUS) : null;
+        } else {
+          roleBasic = guild.roles.cache.find(
+            r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_ACCESS)
+          );
+          rolePlus = guild.roles.cache.find(
+            r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_ACCESS_PLUS)
+          );
+        }
+
+        // Выводим все роли гильдии чтобы было видно точные названия
+        console.log(
+          `[DEBUG /viewadmins] Guild: "${guild.name}" | All roles:`,
+          guild.roles.cache.map(r => `"${r.name}" (${r.id})`).join(", ")
+        );
+        console.log(
+          `[DEBUG /viewadmins] roleBasic: ${roleBasic?.name ?? "NOT FOUND"} | rolePlus: ${rolePlus?.name ?? "NOT FOUND"}`
+        );
 
         if (rolePlus) {
           for (const [, member] of rolePlus.members) {
@@ -550,8 +603,7 @@ client.on("interactionCreate", async (interaction) => {
       const embed = new EmbedBuilder()
         .setTitle("🔍  Debug — Access Role Members")
         .setDescription(
-          `Scanned **${client.guilds.cache.size}** guild(s).
-` +
+          `Scanned **${client.guilds.cache.size}** guild(s).\n` +
           `Total found: **${basicUsers.length + plusUsers.length}** user(s).`
         )
         .addFields(
@@ -575,10 +627,13 @@ client.on("interactionCreate", async (interaction) => {
 
     // /forceadd — requires Pay Access or Pay Access+
     if (commandName === "forceadd") {
+      // Defer сразу — getAccessTier делает сетевой запрос
+      await interaction.deferReply({ ephemeral: true });
+
       const tier = await getAccessTier(interaction.user.id);
 
       if (!tier) {
-        return interaction.reply({
+        return interaction.editReply({
           embeds: [
             new EmbedBuilder()
               .setTitle("⛔  Access Denied")
@@ -587,8 +642,7 @@ client.on("interactionCreate", async (interaction) => {
               )
               .setColor(ERROR_COLOR)
               .setFooter({ text: FOOTER_TEXT })
-          ],
-          ephemeral: true
+          ]
         });
       }
 
@@ -596,18 +650,15 @@ client.on("interactionCreate", async (interaction) => {
       const amount     = interaction.options.getNumber("amount");
 
       if (targetUser.bot) {
-        return interaction.reply({
+        return interaction.editReply({
           embeds: [
             new EmbedBuilder()
               .setTitle("❌  Invalid Target")
               .setDescription("You cannot add balance to a bot account.")
               .setColor(ERROR_COLOR)
-          ],
-          ephemeral: true
+          ]
         });
       }
-
-      await interaction.deferReply({ ephemeral: true });
 
       const success    = await addBalance(targetUser.id, amount);
       const newBalance = await getBalance(targetUser.id);
@@ -792,7 +843,7 @@ client.on("messageCreate", async (message) => {
   }
 });
 
-// ===== PROCESS PAYMENT (from /pay flow) =====
+// ===== PROCESS PAYMENT =====
 async function processPayment(interaction, userId, amount, currency) {
   try {
     const payment = await createPayment(userId, amount, currency);
@@ -868,7 +919,6 @@ app.post("/webhook", async (req, res) => {
     const cfg = STATUS_CONFIG[status];
     if (!cfg) return res.sendStatus(200);
 
-    // Build status embed for the payer
     const embed = new EmbedBuilder()
       .setTitle(`${cfg.icon}  ${cfg.title}`)
       .setDescription(cfg.desc)
@@ -891,20 +941,18 @@ app.post("/webhook", async (req, res) => {
              .setDescription("Payment received but balance update failed. Contact support.");
       }
 
-      // DM the payer
       const payerUser = await client.users.fetch(userId).catch(() => null);
       if (payerUser) {
         await payerUser.send({ embeds: [embed] }).catch(() => {});
       }
 
-      // ── Notify all Pay Access+ members ──
       if (success && payerUser) {
         const notifyEmbed = buildPaymentNotifyEmbed(payerUser, amount, newBalance, payment_id);
         const plusUsers   = await getAccessPlusUsers();
 
         let notified = 0;
         for (const user of plusUsers) {
-          if (user.id === userId) continue; // don't DM the payer themselves
+          if (user.id === userId) continue;
           try {
             await user.send({ embeds: [notifyEmbed] });
             notified++;
@@ -916,7 +964,6 @@ app.post("/webhook", async (req, res) => {
       }
 
     } else {
-      // non-finished statuses: just DM the payer
       if (["waiting", "confirming", "confirmed"].includes(status)) {
         embed.addFields(
           { name: "💵 Amount",   value: `\`${amount} USD\``,  inline: true },
