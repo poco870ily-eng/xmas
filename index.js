@@ -158,26 +158,22 @@ async function getAccessTier(userId) {
 
 /**
  * Fetches all User objects across all guilds who have the Pay Access+ role.
- * Deduplicates by user ID.
+ * Uses role.members (cached) instead of fetching all guild members.
  */
 async function getAccessPlusUsers() {
   const seen  = new Set();
   const users = [];
 
   for (const [, guild] of client.guilds.cache) {
-    let members;
-    try {
-      members = await guild.members.fetch();
-    } catch {
-      continue;
-    }
+    const role = guild.roles.cache.find(
+      r => r.name.toLowerCase() === ROLE_ACCESS_PLUS.toLowerCase()
+    );
+    if (!role) continue;
 
-    for (const [, member] of members) {
+    for (const [, member] of role.members) {
       if (seen.has(member.id)) continue;
-      if (memberHasRole(member, ROLE_ACCESS_PLUS)) {
-        seen.add(member.id);
-        users.push(member.user);
-      }
+      seen.add(member.id);
+      users.push(member.user);
     }
   }
 
@@ -505,26 +501,36 @@ client.on("interactionCreate", async (interaction) => {
       const seen       = new Set();
 
       for (const [, guild] of client.guilds.cache) {
-        let members;
-        try { members = await guild.members.fetch(); } catch { continue; }
+        // Find roles by name (no heavy member fetch needed)
+        const roleBasic = guild.roles.cache.find(
+          r => r.name.toLowerCase() === ROLE_ACCESS.toLowerCase()
+        );
+        const rolePlus = guild.roles.cache.find(
+          r => r.name.toLowerCase() === ROLE_ACCESS_PLUS.toLowerCase()
+        );
 
-        for (const [, member] of members) {
-          if (seen.has(member.id)) continue;
-          const hasPlus  = memberHasRole(member, ROLE_ACCESS_PLUS);
-          const hasBasic = memberHasRole(member, ROLE_ACCESS);
-          if (hasPlus) {
+        // Pay Access+ members
+        if (rolePlus) {
+          for (const [, member] of rolePlus.members) {
+            if (seen.has(member.id)) continue;
             seen.add(member.id);
-            plusUsers.push({ tag: member.user.tag, id: member.id });
-          } else if (hasBasic) {
+            plusUsers.push({ tag: member.user.tag, id: member.id, guild: guild.name });
+          }
+        }
+
+        // Pay Access members (exclude those already counted as Plus)
+        if (roleBasic) {
+          for (const [, member] of roleBasic.members) {
+            if (seen.has(member.id)) continue;
             seen.add(member.id);
-            basicUsers.push({ tag: member.user.tag, id: member.id });
+            basicUsers.push({ tag: member.user.tag, id: member.id, guild: guild.name });
           }
         }
       }
 
       const formatList = (arr) =>
         arr.length > 0
-          ? arr.map(u => `<@${u.id}> — \`${u.tag}\` (\`${u.id}\`)`).join("\n")
+          ? arr.map(u => `<@${u.id}> — \`${u.tag}\` • server: ${u.guild}`).join("\n")
           : "`— None found —`";
 
       const embed = new EmbedBuilder()
