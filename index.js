@@ -2,10 +2,12 @@ import { Client, GatewayIntentBits, EmbedBuilder } from "discord.js";
 import express from "express";
 import axios from "axios";
 import sqlite3 from "sqlite3";
+import crypto from "crypto";
 
 // ===== ENV =====
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const NOWPAYMENTS_API_KEY = process.env.NOWPAYMENTS_API_KEY;
+const IPN_SECRET = process.env.IPN_SECRET;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const PORT = process.env.PORT || 3000;
 
@@ -52,7 +54,7 @@ const client = new Client({
   ]
 });
 
-client.on("ready", () => {
+client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
@@ -63,23 +65,23 @@ client.on("messageCreate", async (message) => {
   if (message.content.startsWith("/pay")) {
     const args = message.content.split(" ");
     const amount = parseFloat(args[1]);
-    const crypto = args[2]?.toLowerCase();
+    const cryptoCurrency = args[2]?.toLowerCase();
 
-    if (!amount || !crypto) {
+    if (!amount || !cryptoCurrency) {
       return message.reply("Используй: `/pay 10 btc` или `/pay 10 ltc`");
     }
 
-    if (crypto !== "btc" && crypto !== "ltc") {
+    if (cryptoCurrency !== "btc" && cryptoCurrency !== "ltc") {
       return message.reply("Доступно только: btc или ltc");
     }
 
     try {
       const response = await axios.post(
-        "https://api.nowpayments.io/v1/invoice",
+        "https://api.nowpayments.io/v1/payment",
         {
           price_amount: amount,
           price_currency: "usd",
-          pay_currency: crypto,
+          pay_currency: cryptoCurrency,
           order_id: message.author.id,
           ipn_callback_url: WEBHOOK_URL
         },
@@ -91,24 +93,26 @@ client.on("messageCreate", async (message) => {
         }
       );
 
-      const invoice = response.data;
+      const payment = response.data;
 
-      // Создаём embed
       const embed = new EmbedBuilder()
-        .setTitle(`💰 Инвойс для оплаты`)
+        .setTitle("💰 Инструкция для оплаты")
         .setColor("#FFD700")
         .addFields(
-          { name: "Сумма", value: `${invoice.price_amount} USD`, inline: true },
-          { name: "Валюта", value: `${invoice.pay_currency.toUpperCase()}`, inline: true },
-          { name: "Адрес для оплаты", value: `\`${invoice.pay_address}\`` },
-          { name: "Ссылка на оплату", value: invoice.invoice_url },
+          { name: "Сумма", value: `${payment.price_amount} USD`, inline: true },
+          { name: "К оплате", value: `${payment.pay_amount} ${payment.pay_currency.toUpperCase()}`, inline: true },
+          { name: "Адрес", value: `\`${payment.pay_address}\`` },
           { name: "Статус", value: "Ожидание оплаты ⏳", inline: true },
-          { name: "Срок действия", value: `${new Date(invoice.expire_date).toLocaleString()}`, inline: true }
+          {
+            name: "Действителен до",
+            value: new Date(payment.expiration_estimate_date).toLocaleString(),
+            inline: true
+          }
         )
         .setTimestamp();
 
       await message.author.send({ embeds: [embed] });
-      message.reply("📬 Инвойс отправлен в ЛС!");
+      message.reply("📬 Инструкция отправлена в ЛС!");
     } catch (err) {
       console.log("NOWPayments error:", err.response?.data || err.message);
       message.reply("❌ Ошибка создания платежа.");
@@ -122,32 +126,50 @@ client.on("messageCreate", async (message) => {
   }
 });
 
+// ===== IPN VERIFY =====
+function verifyIPN(req) {
+  const hmac = crypto
+    .createHmac("sha512", IPN_SECRET)
+    .update(JSON.stringify(req.body))
+    .digest("hex");
+
+  return hmac === req.headers["x-nowpayments-sig"];
+}
+
 // ===== WEBHOOK SERVER =====
 const app = express();
 app.use(express.json());
 
 app.post("/webhook", async (req, res) => {
+  console.log("Webhook received:", req.body);
+
+  if (!verifyIPN(req)) {
+    console.log("❌ Invalid IPN signature");
+    return res.status(401).send("Invalid signature");
+  }
+
   const data = req.body;
+  const status = data.payment_status;
 
-  console.log("Webhook received:", data);
+  console.log("STATUS:", status);
 
-  if (data.payment_status === "finished") {
+  if (status === "confirmed" || status === "finished") {
     const userId = data.order_id;
     const amount = parseFloat(data.price_amount || 0);
 
     addBalance(userId, amount);
     console.log(`✅ Баланс ${userId} пополнен на ${amount} USD`);
 
-    // ===== Уведомление в Discord через embed =====
     try {
       const user = await client.users.fetch(userId);
+
       const embed = new EmbedBuilder()
-        .setTitle("✅ Платёж зачислен")
+        .setTitle("✅ Платёж получен")
         .setColor("#00FF00")
         .addFields(
           { name: "Сумма", value: `${amount} USD`, inline: true },
           { name: "Статус", value: "Завершено ✅", inline: true },
-          { name: "Баланс обновлён", value: "Вы можете проверить с помощью /balance" }
+          { name: "Баланс обновлён", value: "Проверь через /balance" }
         )
         .setTimestamp();
 
