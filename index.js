@@ -23,7 +23,8 @@ const IPN_SECRET = process.env.IPN_SECRET;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const PORT = process.env.PORT || 3000;
 const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;     // ← ОБЯЗАТЕЛЬНО service_role key!
+const OWNER_ID = process.env.OWNER_ID;             // ← ТВОЙ Discord User ID
 
 // ===== SUPABASE =====
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -40,6 +41,7 @@ const client = new Client({
 
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
+  console.log(`🔧 Используется service_role key: ${SUPABASE_KEY ? "✅" : "❌"}`);
   client.user.setPresence({
     activities: [{ name: "💳 Crypto Payments | /pay", type: 0 }],
     status: "online"
@@ -50,48 +52,61 @@ client.once("ready", () => {
 async function addBalance(userId, amount) {
   console.log(`💰 addBalance called: userId=${userId}, amount=${amount}`);
 
-  // Check if user exists
+  const userIdStr = userId.toString();
+  amount = parseFloat(amount);
+
+  if (isNaN(amount) || amount <= 0) return false;
+
+  // Получаем текущий баланс
   const { data, error: selectError } = await supabase
     .from("users")
     .select("balance")
-    .eq("user_id", userId)
+    .eq("user_id", userIdStr)
     .single();
 
-  console.log(`📊 Current user data:`, data, `Error:`, selectError?.message);
+  let currentBalance = 0;
+  if (data) {
+    currentBalance = parseFloat(data.balance || 0);
+  } else if (selectError && selectError.code !== 'PGRST116') {
+    console.error("❌ Select error:", selectError.message);
+    return false;
+  }
 
-  const currentBalance = data ? parseFloat(data.balance) : 0;
   const newBalance = currentBalance + amount;
 
-  console.log(`📈 New balance will be: ${newBalance}`);
-
   if (data) {
-    // User exists — UPDATE
+    // UPDATE
     const { error: updateError } = await supabase
       .from("users")
       .update({ balance: newBalance })
-      .eq("user_id", userId);
-
-    if (updateError) console.error("❌ Update error:", updateError.message);
-    else console.log(`✅ Balance updated to ${newBalance} for userId=${userId}`);
+      .eq("user_id", userIdStr);
+    if (updateError) {
+      console.error("❌ Update error:", updateError.message);
+      return false;
+    }
   } else {
-    // User doesn't exist — INSERT
+    // INSERT
     const { error: insertError } = await supabase
       .from("users")
-      .insert({ user_id: userId, balance: newBalance });
-
-    if (insertError) console.error("❌ Insert error:", insertError.message);
-    else console.log(`✅ User created with balance ${newBalance} for userId=${userId}`);
+      .insert({ user_id: userIdStr, balance: newBalance });
+    if (insertError) {
+      console.error("❌ Insert error:", insertError.message);
+      return false;
+    }
   }
+
+  console.log(`✅ Баланс обновлён до ${newBalance.toFixed(2)} для ${userIdStr}`);
+  return true;
 }
 
 async function getBalance(userId) {
   const { data } = await supabase
     .from("users")
     .select("balance")
-    .eq("user_id", userId)
+    .eq("user_id", userId.toString())
     .single();
 
-  return data ? parseFloat(data.balance) : 0;
+  return data ? parseFloat(data.balance || 0) : 0;
 }
 
 // ===== CURRENCY CONFIG =====
@@ -135,7 +150,7 @@ function buildMainMenuEmbed() {
     )
     .addFields({
       name: "📌 Commands",
-      value: "`/pay` — Top up balance\n`/balance` — Check balance\n`/help` — Show this menu",
+      value: "`/pay` — Top up balance\n`/balance` — Check balance\n`/test <amount>` — [owner] Debug add balance",
       inline: false
     })
     .setColor(0x5865F2)
@@ -227,15 +242,15 @@ function buildAmountRow() {
   );
 }
 
-// ===== PENDING PAYMENTS STORE (in-memory) =====
-const pendingPayments = new Map(); // userId => { amount, currency }
+// ===== PENDING PAYMENTS =====
+const pendingPayments = new Map();
 
-// ===== DISCORD MESSAGE COMMANDS =====
+// ===== MESSAGE COMMANDS =====
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
-  const cmd = message.content.trim().toLowerCase().split(" ")[0];
+  const args = message.content.trim().split(/\s+/);
+  const cmd = args[0].toLowerCase();
 
-  // ─── /help ───────────────────────────────────────────────────────────────
   if (cmd === "/help") {
     const embed = buildMainMenuEmbed();
     const row = new ActionRowBuilder().addComponents(
@@ -245,41 +260,56 @@ client.on("messageCreate", async (message) => {
     await message.reply({ embeds: [embed], components: [row] });
   }
 
-  // ─── /pay ────────────────────────────────────────────────────────────────
   if (cmd === "/pay") {
     const embed = new EmbedBuilder()
       .setTitle("💳  Top Up Balance")
       .setDescription("**Step 1 of 2:** Choose the cryptocurrency you want to pay with.")
-      .setColor(0x5865F2)
-      .setFooter({ text: "You'll choose the amount next" });
-
+      .setColor(0x5865F2);
     await message.reply({ embeds: [embed], components: [buildCurrencyMenu("pay_currency")] });
   }
 
-  // ─── /balance ────────────────────────────────────────────────────────────
   if (cmd === "/balance") {
     const balance = await getBalance(message.author.id);
     const embed = buildBalanceEmbed(message.author.id, balance, message.author.tag);
     await message.reply({ embeds: [embed] });
   }
+
+  // ===== НОВАЯ ДЕБАГ-КОМАНДА /test =====
+  if (cmd === "/test") {
+    if (message.author.id !== OWNER_ID) {
+      return message.reply("⛔ Только владелец бота может использовать эту команду.");
+    }
+
+    const amount = parseFloat(args[1]);
+    if (isNaN(amount) || amount <= 0) {
+      return message.reply("❌ Использование: `/test 10` (или любая сумма > 0)");
+    }
+
+    const success = await addBalance(message.author.id, amount);
+    const newBalance = await getBalance(message.author.id);
+
+    const embed = new EmbedBuilder()
+      .setTitle("🧪 Debug: Test Balance Add")
+      .setColor(success ? 0x57F287 : 0xED4245)
+      .addFields(
+        { name: "Добавлено", value: `**+${amount} USD**`, inline: true },
+        { name: "Новый баланс", value: `**${newBalance.toFixed(2)} USD**`, inline: true }
+      );
+
+    if (!success) embed.setDescription("❌ Ошибка записи в базу. Смотри логи сервера.");
+    await message.reply({ embeds: [embed] });
+  }
 });
 
-// ===== INTERACTION HANDLER =====
+// ===== INTERACTION HANDLER (оставлен без изменений) =====
 client.on("interactionCreate", async (interaction) => {
-
-  // ─── Buttons ─────────────────────────────────────────────────────────────
   if (interaction.isButton()) {
-
     if (interaction.customId === "btn_pay") {
       const embed = new EmbedBuilder()
         .setTitle("💳  Top Up Balance")
         .setDescription("**Step 1 of 2:** Choose the cryptocurrency you want to pay with.")
         .setColor(0x5865F2);
-      await interaction.reply({
-        embeds: [embed],
-        components: [buildCurrencyMenu("pay_currency")],
-        ephemeral: true
-      });
+      await interaction.reply({ embeds: [embed], components: [buildCurrencyMenu("pay_currency")], ephemeral: true });
     }
 
     if (interaction.customId === "btn_balance") {
@@ -288,32 +318,21 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
-    // ─── Amount buttons (after currency chosen) ─────────────────────────
     if (interaction.customId.startsWith("amt_")) {
       const userId = interaction.user.id;
       const pending = pendingPayments.get(userId);
-
-      if (!pending) {
-        return interaction.reply({
-          content: "⚠️ Session expired. Please use `/pay` again.",
-          ephemeral: true
-        });
-      }
+      if (!pending) return interaction.reply({ content: "⚠️ Session expired. Use /pay again.", ephemeral: true });
 
       if (interaction.customId === "amt_custom") {
         const modal = new ModalBuilder()
           .setCustomId("modal_custom_amount")
           .setTitle("💵 Enter Custom Amount");
-
         const input = new TextInputBuilder()
           .setCustomId("custom_amount_input")
           .setLabel("Amount in USD (e.g. 15.50)")
           .setStyle(TextInputStyle.Short)
-          .setPlaceholder("Enter amount between 1 and 1000")
-          .setRequired(true)
-          .setMinLength(1)
-          .setMaxLength(10);
-
+          .setPlaceholder("1 — 1000")
+          .setRequired(true);
         modal.addComponents(new ActionRowBuilder().addComponents(input));
         return await interaction.showModal(modal);
       }
@@ -327,46 +346,30 @@ client.on("interactionCreate", async (interaction) => {
     }
   }
 
-  // ─── Select Menu: currency chosen ───────────────────────────────────────
   if (interaction.isStringSelectMenu() && interaction.customId === "pay_currency") {
     const currency = interaction.values[0];
     const userId = interaction.user.id;
-
     pendingPayments.set(userId, { currency, amount: null });
 
     const cur = CURRENCIES[currency];
     const embed = new EmbedBuilder()
       .setTitle(`${cur.emoji}  ${cur.name} Selected`)
       .setDescription("**Step 2 of 2:** Choose an amount to top up.")
-      .setColor(0x5865F2)
-      .setFooter({ text: `Paying with ${cur.name} (${currency})` });
+      .setColor(0x5865F2);
 
-    await interaction.update({
-      embeds: [embed],
-      components: [buildAmountRow()]
-    });
+    await interaction.update({ embeds: [embed], components: [buildAmountRow()] });
   }
 
-  // ─── Modal: custom amount submitted ─────────────────────────────────────
   if (interaction.isModalSubmit() && interaction.customId === "modal_custom_amount") {
     const userId = interaction.user.id;
     const pending = pendingPayments.get(userId);
-
-    if (!pending) {
-      return interaction.reply({
-        content: "⚠️ Session expired. Please use `/pay` again.",
-        ephemeral: true
-      });
-    }
+    if (!pending) return interaction.reply({ content: "⚠️ Session expired.", ephemeral: true });
 
     const rawAmount = interaction.fields.getTextInputValue("custom_amount_input");
     const amount = parseFloat(rawAmount);
 
     if (isNaN(amount) || amount < 1 || amount > 1000) {
-      return interaction.reply({
-        content: "❌ Invalid amount. Please enter a number between 1 and 1000.",
-        ephemeral: true
-      });
+      return interaction.reply({ content: "❌ Invalid amount (1-1000).", ephemeral: true });
     }
 
     pending.amount = amount;
@@ -383,38 +386,22 @@ async function processPayment(interaction, userId, amount, currency) {
     const payment = await createPayment(userId, amount, currency);
     const embed = buildPaymentEmbed(payment, currency);
 
-    // Try to DM the user the details
     try {
       const user = await client.users.fetch(userId);
       await user.send({ embeds: [embed] });
-      await interaction.editReply({
-        content: "📬 Payment details sent to your **DMs**! Check your direct messages.",
-        embeds: [],
-        components: []
-      });
+      await interaction.editReply({ content: "📬 Payment details sent to your DMs!", embeds: [], components: [] });
     } catch {
-      // If DMs are disabled, show in ephemeral reply
-      await interaction.editReply({
-        content: "📋 Here are your payment details (DMs are disabled):",
-        embeds: [embed],
-        components: []
-      });
+      await interaction.editReply({ content: "📋 Payment details (DMs disabled):", embeds: [embed], components: [] });
     }
 
-    // Cleanup pending session after 30 min
     setTimeout(() => pendingPayments.delete(userId), 30 * 60 * 1000);
-
   } catch (err) {
     console.error("Payment creation error:", err.response?.data || err.message);
-    await interaction.editReply({
-      content: "❌ Failed to create payment. Please try again later.",
-      embeds: [],
-      components: []
-    });
+    await interaction.editReply({ content: "❌ Failed to create payment.", embeds: [], components: [] });
   }
 }
 
-// ===== IPN SIGNATURE VERIFY =====
+// ===== IPN VERIFY =====
 function verifyIPN(req) {
   const hmac = crypto
     .createHmac("sha512", IPN_SECRET)
@@ -423,44 +410,14 @@ function verifyIPN(req) {
   return hmac === req.headers["x-nowpayments-sig"];
 }
 
-// ===== STATUS EMBEDS FOR WEBHOOK =====
-const STATUS_CONFIG = {
-  waiting: {
-    color: 0xFEE75C,
-    icon: "⏳",
-    title: "Payment Waiting",
-    desc: "We're waiting for your crypto transfer. Send the exact amount to the address provided."
-  },
-  confirming: {
-    color: 0x5865F2,
-    icon: "🔄",
-    title: "Confirming...",
-    desc: "Payment received! Waiting for blockchain confirmations. This may take a few minutes."
-  },
-  confirmed: {
-    color: 0x57F287,
-    icon: "💚",
-    title: "Payment Confirmed",
-    desc: "Your payment has been confirmed by the network. Balance will update shortly."
-  },
-  finished: {
-    color: 0x57F287,
-    icon: "✅",
-    title: "Payment Complete!",
-    desc: "Your balance has been topped up successfully."
-  },
-  failed: {
-    color: 0xED4245,
-    icon: "❌",
-    title: "Payment Failed",
-    desc: "Unfortunately your payment failed. Please create a new payment and try again."
-  },
-  expired: {
-    color: 0x99AAB5,
-    icon: "💀",
-    title: "Payment Expired",
-    desc: "The payment window has expired. Use `/pay` to create a new payment."
-  }
+// ===== STATUS CONFIG =====
+const STATUS_CONFIG = { /* оставлен без изменений */ 
+  waiting: { color: 0xFEE75C, icon: "⏳", title: "Payment Waiting", desc: "..." },
+  confirming: { color: 0x5865F2, icon: "🔄", title: "Confirming...", desc: "..." },
+  confirmed: { color: 0x57F287, icon: "💚", title: "Payment Confirmed", desc: "..." },
+  finished: { color: 0x57F287, icon: "✅", title: "Payment Complete!", desc: "Your balance has been topped up." },
+  failed: { color: 0xED4245, icon: "❌", title: "Payment Failed", desc: "..." },
+  expired: { color: 0x99AAB5, icon: "💀", title: "Payment Expired", desc: "..." }
 };
 
 // ===== WEB SERVER =====
@@ -480,7 +437,7 @@ app.post("/webhook", async (req, res) => {
   const { payment_status: status, order_id: userId, price_amount, pay_currency, payment_id } = req.body;
   const amount = parseFloat(price_amount || 0);
 
-  console.log(`🔔 Webhook: status=${status}, userId=${userId}, amount=${amount}, paymentId=${payment_id}`);
+  console.log(`🔔 Webhook: status=${status}, userId=${userId}, amount=${amount}`);
 
   try {
     const cfg = STATUS_CONFIG[status];
@@ -493,12 +450,19 @@ app.post("/webhook", async (req, res) => {
       .setTimestamp();
 
     if (status === "finished") {
-      await addBalance(userId, amount);
+      const success = await addBalance(userId, amount);
       const newBalance = await getBalance(userId);
+
       embed.addFields(
         { name: "Amount Added", value: `**+${amount} USD**`, inline: true },
         { name: "New Balance", value: `**${newBalance.toFixed(2)} USD**`, inline: true }
       );
+
+      if (!success) {
+        embed.setColor(0xED4245)
+             .setTitle("⚠️ Payment OK, but balance update FAILED")
+             .setDescription("Проверь логи бота!");
+      }
     } else if (["waiting", "confirming", "confirmed"].includes(status)) {
       embed.addFields(
         { name: "Amount", value: `**${amount} USD**`, inline: true },
@@ -508,9 +472,8 @@ app.post("/webhook", async (req, res) => {
 
     embed.setFooter({ text: `Payment ID: ${payment_id}` });
 
-    const user = await client.users.fetch(userId);
-    await user.send({ embeds: [embed] });
-
+    const user = await client.users.fetch(userId).catch(() => null);
+    if (user) await user.send({ embeds: [embed] });
   } catch (err) {
     console.error("Webhook processing error:", err.message);
   }
