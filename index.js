@@ -361,7 +361,6 @@ function buildCurrencyMenu(customId = "select_currency") {
       .setLabel(`${info.name} (${code})`)
       .setDescription(`Pay with ${info.name}`)
       .setValue(code)
-      .setEmoji(code === "BTC" ? "₿" : code === "ETH" ? "Ξ" : code === "SOL" ? "◎" : "🪙")
   );
 
   const menu = new StringSelectMenuBuilder()
