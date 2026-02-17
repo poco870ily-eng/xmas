@@ -37,14 +37,13 @@ client.once("ready", () => {
 
 // ===== HELPERS =====
 async function addBalance(userId, amount) {
-  const { data, error } = await supabase
+  const { data } = await supabase
     .from("users")
     .select("balance")
     .eq("user_id", userId)
     .single();
 
-  let newBalance = amount;
-  if (data) newBalance += parseFloat(data.balance);
+  const newBalance = data ? parseFloat(data.balance) + amount : amount;
 
   await supabase
     .from("users")
@@ -99,18 +98,25 @@ client.on("messageCreate", async (message) => {
       const payment = response.data;  
       console.log("Payment response:", payment);
 
-      // === ИСПРАВЛЕНО КАК В СТАРОМ КОДЕ ===
-      // Убрана сломанная payLink, оставлен только адрес (точно как было раньше)
+      // ✅ ИСПРАВЛЕННАЯ РАБОЧАЯ ССЫЛКА (точно как должно быть)
+      const payLink = payment.invoice_url || 
+                     (payment.payment_id ? `https://nowpayments.io/payment/?iid=${payment.payment_id}` : null);
 
       const embed = new EmbedBuilder()  
         .setTitle("💰 Payment Instructions")  
         .setColor("#FFD700")  
         .addFields(  
+          { 
+            name: "🔗 Pay Link", 
+            value: payLink 
+              ? `[Click Here to Pay](${payLink})` 
+              : "Link will appear soon" 
+          },
           { name: "Amount", value: `${payment.price_amount} USD`, inline: true },  
           { name: "To Pay", value: `${payment.pay_amount} ${payment.pay_currency}`, inline: true },  
           {  
             name: "Payment Address",  
-            value: payment.pay_address ? `\`${payment.pay_address}\`` : "Address will appear after payment starts"  
+            value: payment.pay_address ? `\`${payment.pay_address}\`` : "Use Pay Link above"  
           },  
           { name: "Status", value: payment.payment_status || "waiting", inline: true },  
           {  
@@ -186,7 +192,6 @@ app.post("/webhook", async (req, res) => {
 
       await user.send({ embeds: [embed] });  
     }
-
   } catch (err) {
     console.log("DM error:", err.message);
   }
