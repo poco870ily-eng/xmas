@@ -164,13 +164,10 @@ client.once("ready", async () => {
   try {
     console.log("🔄 Registering slash commands...");
     
-    // ВАЖНО: Регистрируем ТОЛЬКО для гильдии, чтобы избежать дублирования
     if (GUILD_ID) {
-      // Сначала очищаем глобальные команды (если были)
       await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
       console.log("🗑️  Cleared global commands to prevent duplicates");
       
-      // Регистрируем для конкретного сервера
       await rest.put(
         Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
         { body: SLASH_COMMANDS }
@@ -299,19 +296,33 @@ async function addBalance(userId, amount) {
 }
 
 async function deductBalance(userId, amount) {
+  console.log(`💸 deductBalance: userId=${userId}, amount=${amount}`);
   const userIdStr = userId.toString();
   amount = parseFloat(amount);
   
-  const { data } = await supabase
+  const { data, error: selectError } = await supabase
     .from("users")
     .select("balance")
     .eq("user_id", userIdStr)
     .single();
 
-  if (!data) return false;
+  if (selectError && selectError.code !== "PGRST116") {
+    console.error("❌ Deduct select error:", selectError.message);
+    return false;
+  }
+
+  if (!data) {
+    console.log("⚠️ User not found in database");
+    return false;
+  }
   
   const currentBalance = parseFloat(data.balance || 0);
-  if (currentBalance < amount) return false;
+  console.log(`📊 Current balance: ${currentBalance}, trying to deduct: ${amount}`);
+  
+  if (currentBalance < amount) {
+    console.log("⚠️ Insufficient balance");
+    return false;
+  }
   
   const newBalance = currentBalance - amount;
   
@@ -325,6 +336,7 @@ async function deductBalance(userId, amount) {
     return false;
   }
   
+  console.log(`✅ Balance deducted. New balance: ${newBalance}`);
   return true;
 }
 
@@ -339,28 +351,49 @@ async function getBalance(userId) {
 
 // ===== KEY HELPERS =====
 async function getAvailableKeyCount(productId) {
-  const { count } = await supabase
+  console.log(`🔍 Counting available keys for product: ${productId}`);
+  const { count, error } = await supabase
     .from("keys")
     .select("*", { count: "exact", head: true })
     .eq("product_id", productId)
     .eq("is_used", false);
+  
+  if (error) {
+    console.error("❌ Error counting keys:", error.message);
+    return 0;
+  }
+  
+  console.log(`📊 Available keys: ${count || 0}`);
   return count || 0;
 }
 
 async function getRandomAvailableKey(productId) {
+  console.log(`🔑 Getting random key for product: ${productId}`);
+  
+  // ИСПРАВЛЕНИЕ: Убрали .single() - он вызывает ошибку
   const { data, error } = await supabase
     .from("keys")
     .select("*")
     .eq("product_id", productId)
     .eq("is_used", false)
-    .limit(1)
-    .single();
+    .limit(1);
     
-  if (error || !data) return null;
-  return data;
+  if (error) {
+    console.error("❌ Error fetching key:", error.message);
+    return null;
+  }
+  
+  if (!data || data.length === 0) {
+    console.log("⚠️ No available keys found");
+    return null;
+  }
+  
+  console.log(`✅ Found key: ${data[0].key_value.substring(0, 10)}...`);
+  return data[0];
 }
 
 async function markKeyAsUsed(keyId, userId) {
+  console.log(`🔒 Marking key ${keyId} as used by ${userId}`);
   const { error } = await supabase
     .from("keys")
     .update({ 
@@ -370,10 +403,17 @@ async function markKeyAsUsed(keyId, userId) {
     })
     .eq("id", keyId);
     
-  return !error;
+  if (error) {
+    console.error("❌ Error marking key as used:", error.message);
+    return false;
+  }
+  
+  console.log("✅ Key marked as used");
+  return true;
 }
 
 async function addKeys(productId, keys) {
+  console.log(`➕ Adding ${keys.length} keys for product: ${productId}`);
   const keyRecords = keys.map(key => ({
     product_id: productId,
     key_value: key.trim(),
@@ -384,10 +424,17 @@ async function addKeys(productId, keys) {
     .from("keys")
     .insert(keyRecords);
     
-  return !error;
+  if (error) {
+    console.error("❌ Error adding keys:", error.message);
+    return false;
+  }
+  
+  console.log("✅ Keys added successfully");
+  return true;
 }
 
 async function getProductKeys(productId, page = 1, perPage = 10) {
+  console.log(`📋 Getting keys for product: ${productId}, page: ${page}`);
   const from = (page - 1) * perPage;
   const to = from + perPage - 1;
   
@@ -398,17 +445,29 @@ async function getProductKeys(productId, page = 1, perPage = 10) {
     .order("created_at", { ascending: false })
     .range(from, to);
     
-  if (error) return { keys: [], total: 0 };
+  if (error) {
+    console.error("❌ Error getting keys:", error.message);
+    return { keys: [], total: 0 };
+  }
+  
+  console.log(`📊 Found ${count || 0} total keys, returning ${data?.length || 0} for this page`);
   return { keys: data || [], total: count || 0 };
 }
 
 async function deleteKey(keyId) {
+  console.log(`🗑️ Deleting key: ${keyId}`);
   const { error } = await supabase
     .from("keys")
     .delete()
     .eq("id", keyId);
     
-  return !error;
+  if (error) {
+    console.error("❌ Error deleting key:", error.message);
+    return false;
+  }
+  
+  console.log("✅ Key deleted");
+  return true;
 }
 
 // ===== PRODUCT CONFIG =====
@@ -908,7 +967,7 @@ client.on("interactionCreate", async (interaction) => {
       const perPage = 10;
 
       const { keys, total } = await getProductKeys(productId, page, perPage);
-      const totalPages = Math.ceil(total / perPage);
+      const totalPages = Math.ceil(total / perPage) || 1;
 
       const product = PRODUCTS[productId];
       
@@ -919,6 +978,7 @@ client.on("interactionCreate", async (interaction) => {
               .setTitle(`📋  ${product.name} Keys`)
               .setDescription("No keys found for this product.")
               .setColor(NEUTRAL_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
           ]
         });
       }
@@ -1145,16 +1205,20 @@ client.on("interactionCreate", async (interaction) => {
 
     // Buy product buttons
     if (interaction.customId.startsWith("buy_")) {
+      console.log(`🛒 Purchase initiated by ${interaction.user.tag}`);
       await interaction.deferReply({ ephemeral: true });
 
       const parts = interaction.customId.split("_");
       const productId = parts[1];
       const days = parseInt(parts[2]);
 
+      console.log(`📦 Product: ${productId}, Days: ${days}`);
+
       const product = PRODUCTS[productId];
       const tier = product.tiers.find(t => t.days === days);
 
       if (!tier) {
+        console.log("❌ Invalid tier");
         return interaction.editReply({
           embeds: [
             new EmbedBuilder()
@@ -1166,8 +1230,10 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       const balance = await getBalance(interaction.user.id);
+      console.log(`💰 User balance: ${balance}, Required: ${tier.price}`);
 
       if (balance < tier.price) {
+        console.log("⚠️ Insufficient balance");
         return interaction.editReply({
           embeds: [
             new EmbedBuilder()
@@ -1186,6 +1252,7 @@ client.on("interactionCreate", async (interaction) => {
       const key = await getRandomAvailableKey(productId);
 
       if (!key) {
+        console.log("📦 Out of stock");
         return interaction.editReply({
           embeds: [
             new EmbedBuilder()
@@ -1199,6 +1266,7 @@ client.on("interactionCreate", async (interaction) => {
 
       const deducted = await deductBalance(interaction.user.id, tier.price);
       if (!deducted) {
+        console.log("❌ Failed to deduct balance");
         return interaction.editReply({
           embeds: [
             new EmbedBuilder()
@@ -1213,6 +1281,8 @@ client.on("interactionCreate", async (interaction) => {
 
       const newBalance = await getBalance(interaction.user.id);
       const stock = await getAvailableKeyCount(productId);
+
+      console.log(`✅ Purchase successful! New balance: ${newBalance}, Remaining stock: ${stock}`);
 
       await interaction.editReply({
         embeds: [
@@ -1246,8 +1316,9 @@ client.on("interactionCreate", async (interaction) => {
               .setTimestamp()
           ]
         });
-      } catch {
-        console.log(`⚠️ Could not DM key to ${interaction.user.tag}`);
+        console.log(`📬 Key sent to ${interaction.user.tag}`);
+      } catch (err) {
+        console.log(`⚠️ Could not DM key to ${interaction.user.tag}:`, err.message);
       }
 
       return;
@@ -1264,7 +1335,7 @@ client.on("interactionCreate", async (interaction) => {
       const perPage = 10;
 
       const { keys, total } = await getProductKeys(productId, page, perPage);
-      const totalPages = Math.ceil(total / perPage);
+      const totalPages = Math.ceil(total / perPage) || 1;
 
       const product = PRODUCTS[productId];
 
@@ -1277,7 +1348,7 @@ client.on("interactionCreate", async (interaction) => {
 
       const embed = new EmbedBuilder()
         .setTitle(`📋  ${product.name} Keys`)
-        .setDescription(keyList)
+        .setDescription(keyList || "No keys found.")
         .addFields(
           { name: "📊 Total Keys", value: `\`${total}\``, inline: true },
           { name: "📄 Page", value: `\`${page} / ${totalPages}\``, inline: true },
