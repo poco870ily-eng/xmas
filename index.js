@@ -370,7 +370,6 @@ async function getAvailableKeyCount(productId) {
 async function getRandomAvailableKey(productId) {
   console.log(`🔑 Getting random key for product: ${productId}`);
   
-  // ИСПРАВЛЕНИЕ: Убрали .single() - он вызывает ошибку
   const { data, error } = await supabase
     .from("keys")
     .select("*")
@@ -1203,123 +1202,147 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // Buy product buttons
+    // ── Buy product buttons ──
+    // customId format: buy_<productId>_<days>
+    // e.g. buy_auto_joiner_1  →  productId="auto_joiner", days=1
     if (interaction.customId.startsWith("buy_")) {
-      console.log(`🛒 Purchase initiated by ${interaction.user.tag}`);
+      console.log(`🛒 Purchase initiated by ${interaction.user.tag}: ${interaction.customId}`);
       await interaction.deferReply({ ephemeral: true });
 
-      const withoutPrefix = interaction.customId.slice("buy_".length); // "auto_joiner_1"
-      const lastUnderscore = withoutPrefix.lastIndexOf("_");
-      const productId = withoutPrefix.substring(0, lastUnderscore);     // "auto_joiner"
-      const days = parseInt(withoutPrefix.substring(lastUnderscore + 1)); // 1
-
-      console.log(`📦 Product: ${productId}, Days: ${days}`);
-
-      const product = PRODUCTS[productId];
-      const tier = product.tiers.find(t => t.days === days);
-
-      if (!tier) {
-        console.log("❌ Invalid tier");
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  Invalid Product")
-              .setDescription("This product tier could not be found.")
-              .setColor(ERROR_COLOR)
-          ]
-        });
-      }
-
-      const balance = await getBalance(interaction.user.id);
-      console.log(`💰 User balance: ${balance}, Required: ${tier.price}`);
-
-      if (balance < tier.price) {
-        console.log("⚠️ Insufficient balance");
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("💰  Insufficient Balance")
-              .setDescription(
-                `You need **$${tier.price.toFixed(2)}** but only have **$${balance.toFixed(2)}**.\n` +
-                `Missing: **$${(tier.price - balance).toFixed(2)}**\n\n` +
-                `Use \`/pay\` to top up your balance.`
-              )
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        });
-      }
-
-      const key = await getRandomAvailableKey(productId);
-
-      if (!key) {
-        console.log("📦 Out of stock");
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("📦  Out of Stock")
-              .setDescription(`${product.name} is currently out of stock. Please check back later.`)
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        });
-      }
-
-      const deducted = await deductBalance(interaction.user.id, tier.price);
-      if (!deducted) {
-        console.log("❌ Failed to deduct balance");
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  Payment Failed")
-              .setDescription("Could not process payment. Please try again.")
-              .setColor(ERROR_COLOR)
-          ]
-        });
-      }
-
-      await markKeyAsUsed(key.id, interaction.user.id);
-
-      const newBalance = await getBalance(interaction.user.id);
-      const stock = await getAvailableKeyCount(productId);
-
-      console.log(`✅ Purchase successful! New balance: ${newBalance}, Remaining stock: ${stock}`);
-
-      await interaction.editReply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle("✅  Purchase Successful!")
-            .setDescription(`You've purchased **${product.name}** — ${tier.days} day${tier.days > 1 ? 's' : ''}`)
-            .addFields(
-              { name: "💵 Price", value: `\`$${tier.price}\``, inline: true },
-              { name: "💰 New Balance", value: `\`$${newBalance.toFixed(2)}\``, inline: true },
-              { name: "📦 Remaining Stock", value: `\`${stock} keys\``, inline: true }
-            )
-            .setColor(SUCCESS_COLOR)
-            .setFooter({ text: "Your key has been sent to your DMs • " + FOOTER_TEXT })
-            .setTimestamp()
-        ]
-      });
-
       try {
-        await interaction.user.send({
+        // Correctly parse productId even if it contains underscores
+        const withoutPrefix  = interaction.customId.slice("buy_".length); // "auto_joiner_1"
+        const lastUnderscore = withoutPrefix.lastIndexOf("_");
+        const productId      = withoutPrefix.substring(0, lastUnderscore); // "auto_joiner"
+        const days           = parseInt(withoutPrefix.substring(lastUnderscore + 1)); // 1
+
+        console.log(`📦 Parsed → productId: "${productId}", days: ${days}`);
+
+        const product = PRODUCTS[productId];
+
+        if (!product) {
+          return interaction.editReply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("❌  Product Not Found")
+                .setDescription(`Unknown product: \`${productId}\``)
+                .setColor(ERROR_COLOR)
+            ]
+          });
+        }
+
+        const tier = product.tiers.find(t => t.days === days);
+
+        if (!tier) {
+          return interaction.editReply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("❌  Tier Not Found")
+                .setDescription(`No tier found for \`${days}\` day(s) in **${product.name}**.`)
+                .setColor(ERROR_COLOR)
+            ]
+          });
+        }
+
+        const balance = await getBalance(interaction.user.id);
+        console.log(`💰 User balance: ${balance}, Required: ${tier.price}`);
+
+        if (balance < tier.price) {
+          return interaction.editReply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("💰  Insufficient Balance")
+                .setDescription(
+                  `You need **$${tier.price.toFixed(2)}** but only have **$${balance.toFixed(2)}**.\n` +
+                  `Missing: **$${(tier.price - balance).toFixed(2)}**\n\n` +
+                  `Use \`/pay\` to top up your balance.`
+                )
+                .setColor(ERROR_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+            ]
+          });
+        }
+
+        const key = await getRandomAvailableKey(productId);
+
+        if (!key) {
+          return interaction.editReply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("📦  Out of Stock")
+                .setDescription(`**${product.name}** is currently out of stock. Please check back later.`)
+                .setColor(WARNING_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+            ]
+          });
+        }
+
+        const deducted = await deductBalance(interaction.user.id, tier.price);
+        if (!deducted) {
+          return interaction.editReply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("❌  Payment Failed")
+                .setDescription("Could not process payment. Please try again.")
+                .setColor(ERROR_COLOR)
+            ]
+          });
+        }
+
+        await markKeyAsUsed(key.id, interaction.user.id);
+
+        const newBalance = await getBalance(interaction.user.id);
+        const stock      = await getAvailableKeyCount(productId);
+
+        console.log(`✅ Purchase successful! New balance: ${newBalance}, Remaining stock: ${stock}`);
+
+        await interaction.editReply({
           embeds: [
             new EmbedBuilder()
-              .setTitle(`🔑  ${product.name} Key`)
-              .setDescription(`Your **${tier.days} day${tier.days > 1 ? 's' : ''}** license key:`)
+              .setTitle("✅  Purchase Successful!")
+              .setDescription(`You've purchased **${product.name}** — ${tier.days} day${tier.days > 1 ? 's' : ''}`)
               .addFields(
-                { name: "🔐 License Key", value: `\`\`\`\n${key.key_value}\n\`\`\``, inline: false },
-                { name: "⏱️ Duration", value: `\`${tier.days} day${tier.days > 1 ? 's' : ''}\``, inline: true },
-                { name: "💵 Price", value: `\`$${tier.price}\``, inline: true }
+                { name: "💵 Price",           value: `\`$${tier.price}\``,            inline: true },
+                { name: "💰 New Balance",      value: `\`$${newBalance.toFixed(2)}\``, inline: true },
+                { name: "📦 Remaining Stock",  value: `\`${stock} keys\``,             inline: true }
               )
               .setColor(SUCCESS_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
+              .setFooter({ text: "Your key has been sent to your DMs • " + FOOTER_TEXT })
               .setTimestamp()
           ]
         });
-        console.log(`📬 Key sent to ${interaction.user.tag}`);
+
+        try {
+          await interaction.user.send({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle(`🔑  ${product.name} Key`)
+                .setDescription(`Your **${tier.days} day${tier.days > 1 ? 's' : ''}** license key:`)
+                .addFields(
+                  { name: "🔐 License Key", value: `\`\`\`\n${key.key_value}\n\`\`\``, inline: false },
+                  { name: "⏱️ Duration",    value: `\`${tier.days} day${tier.days > 1 ? 's' : ''}\``, inline: true },
+                  { name: "💵 Price",       value: `\`$${tier.price}\``,                               inline: true }
+                )
+                .setColor(SUCCESS_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+                .setTimestamp()
+            ]
+          });
+          console.log(`📬 Key sent to ${interaction.user.tag}`);
+        } catch (dmErr) {
+          console.log(`⚠️ Could not DM key to ${interaction.user.tag}:`, dmErr.message);
+        }
+
       } catch (err) {
-        console.log(`⚠️ Could not DM key to ${interaction.user.tag}:`, err.message);
+        console.error("❌ Buy handler error:", err);
+        await interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Unexpected Error")
+              .setDescription(`\`\`\`\n${err.message}\n\`\`\`\nPlease contact support.`)
+              .setColor(ERROR_COLOR)
+          ]
+        }).catch(() => {});
       }
 
       return;
@@ -1329,11 +1352,11 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.customId.startsWith("keylist_")) {
       await interaction.deferUpdate();
 
-      const parts = interaction.customId.split("_");
+      const parts     = interaction.customId.split("_");
       const isRefresh = parts[1] === "refresh";
       const productId = isRefresh ? parts[2] : parts[1];
-      const page = parseInt(isRefresh ? parts[3] : parts[2]);
-      const perPage = 10;
+      const page      = parseInt(isRefresh ? parts[3] : parts[2]);
+      const perPage   = 10;
 
       const { keys, total } = await getProductKeys(productId, page, perPage);
       const totalPages = Math.ceil(total / perPage) || 1;
@@ -1341,8 +1364,8 @@ client.on("interactionCreate", async (interaction) => {
       const product = PRODUCTS[productId];
 
       const keyList = keys.map((key, idx) => {
-        const num = (page - 1) * perPage + idx + 1;
-        const status = key.is_used ? "❌ Used" : "✅ Available";
+        const num        = (page - 1) * perPage + idx + 1;
+        const status     = key.is_used ? "❌ Used" : "✅ Available";
         const keyPreview = key.key_value.substring(0, 20) + "...";
         return `**${num}.** \`${keyPreview}\` — ${status}`;
       }).join("\n");
@@ -1351,9 +1374,9 @@ client.on("interactionCreate", async (interaction) => {
         .setTitle(`📋  ${product.name} Keys`)
         .setDescription(keyList || "No keys found.")
         .addFields(
-          { name: "📊 Total Keys", value: `\`${total}\``, inline: true },
-          { name: "📄 Page", value: `\`${page} / ${totalPages}\``, inline: true },
-          { name: "✅ Available", value: `\`${keys.filter(k => !k.is_used).length}\``, inline: true }
+          { name: "📊 Total Keys", value: `\`${total}\``,             inline: true },
+          { name: "📄 Page",       value: `\`${page} / ${totalPages}\``, inline: true },
+          { name: "✅ Available",  value: `\`${keys.filter(k => !k.is_used).length}\``, inline: true }
         )
         .setColor(BRAND_COLOR)
         .setFooter({ text: `Use buttons to navigate • ${FOOTER_TEXT}` })
@@ -1409,7 +1432,7 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.isStringSelectMenu()) {
     if (interaction.customId === "select_product") {
       const productId = interaction.values[0];
-      const product = PRODUCTS[productId];
+      const product   = PRODUCTS[productId];
 
       if (product.comingSoon) {
         return interaction.update({
@@ -1424,7 +1447,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      const stock = await getAvailableKeyCount(productId);
+      const stock    = await getAvailableKeyCount(productId);
       const tierInfo = product.tiers.map(t => 
         `**${t.days} day${t.days > 1 ? 's' : ''}** — ~~$${t.originalPrice}~~ **$${t.price}** 🔥 (Save $${t.originalPrice - t.price})`
       ).join("\n");
