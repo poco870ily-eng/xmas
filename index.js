@@ -79,8 +79,7 @@ const SLASH_COMMANDS = [
   {
     name: "forceadd",
     description: "🔧 [Pay Access] Manually add balance to a user",
-    // ИСПРАВЛЕНИЕ: убрали default_member_permissions — теперь команда видна всем
-    // Проверка доступа по ролям происходит в коде
+    dm_permission: false, // ← Команда работает ТОЛЬКО на серверах, не в DM
     options: [
       {
         name: "user",
