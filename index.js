@@ -12,7 +12,8 @@ import {
   TextInputStyle,
   REST,
   Routes,
-  ApplicationCommandOptionType
+  ApplicationCommandOptionType,
+  AttachmentBuilder
 } from "discord.js";
 import express from "express";
 import axios from "axios";
@@ -29,7 +30,7 @@ const PORT                = process.env.PORT || 3000;
 const SUPABASE_URL        = process.env.SUPABASE_URL;
 const SUPABASE_KEY        = process.env.SUPABASE_KEY;
 const OWNER_ID            = process.env.OWNER_ID;
-const GUILD_ID            = process.env.GUILD_ID; // ID твоего Discord сервера для быстрой регистрации команд
+const GUILD_ID            = process.env.GUILD_ID;
 
 // ===== ROLE NAMES =====
 const ROLE_ACCESS      = "Pay Access";
@@ -65,6 +66,10 @@ const SLASH_COMMANDS = [
     description: "💰 Check your current balance"
   },
   {
+    name: "buy",
+    description: "🛒 Purchase products (Auto Joiner, Notifier, etc.)"
+  },
+  {
     name: "help",
     description: "📖 Show all available commands"
   },
@@ -72,14 +77,12 @@ const SLASH_COMMANDS = [
     name: "viewadmins",
     description: "🔍 [Owner] Debug — list all users with Pay Access / Pay Access+ roles",
     dm_permission: false,
-    default_member_permissions: "0" // Только владелец сервера
+    default_member_permissions: "0"
   },
   {
     name: "forceadd",
     description: "🔧 [Pay Access] Manually add balance to a user",
-    dm_permission: false, // Только на сервере, не в DM
-    // Убрали default_member_permissions — команда видна ВСЕМ
-    // Проверка прав происходит в коде
+    dm_permission: false,
     options: [
       {
         name: "user",
@@ -96,6 +99,59 @@ const SLASH_COMMANDS = [
         max_value: 100000
       }
     ]
+  },
+  {
+    name: "addkey",
+    description: "🔑 [Pay Access] Add keys to a product",
+    dm_permission: false,
+    options: [
+      {
+        name: "product",
+        description: "Product to add keys for",
+        type: ApplicationCommandOptionType.String,
+        required: true,
+        choices: [
+          { name: "Auto Joiner", value: "auto_joiner" },
+          { name: "Notifier", value: "notifier" }
+        ]
+      },
+      {
+        name: "keys",
+        description: "Keys separated by spaces or newlines",
+        type: ApplicationCommandOptionType.String,
+        required: false
+      },
+      {
+        name: "file",
+        description: "Text file with keys (one per line)",
+        type: ApplicationCommandOptionType.Attachment,
+        required: false
+      }
+    ]
+  },
+  {
+    name: "keylist",
+    description: "📋 [Pay Access] View and manage product keys",
+    dm_permission: false,
+    options: [
+      {
+        name: "product",
+        description: "Product to view keys for",
+        type: ApplicationCommandOptionType.String,
+        required: true,
+        choices: [
+          { name: "Auto Joiner", value: "auto_joiner" },
+          { name: "Notifier", value: "notifier" }
+        ]
+      },
+      {
+        name: "page",
+        description: "Page number (default: 1)",
+        type: ApplicationCommandOptionType.Integer,
+        required: false,
+        min_value: 1
+      }
+    ]
   }
 ];
 
@@ -108,19 +164,20 @@ client.once("ready", async () => {
   try {
     console.log("🔄 Registering slash commands...");
     
+    // ВАЖНО: Регистрируем ТОЛЬКО для гильдии, чтобы избежать дублирования
     if (GUILD_ID) {
-      // Регистрация для конкретного сервера (мгновенно)
+      // Сначала очищаем глобальные команды (если были)
+      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
+      console.log("🗑️  Cleared global commands to prevent duplicates");
+      
+      // Регистрируем для конкретного сервера
       await rest.put(
         Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
         { body: SLASH_COMMANDS }
       );
       console.log(`✅ Slash commands registered for guild ${GUILD_ID}!`);
     } else {
-      // Глобальная регистрация (может занять до 1 часа)
-      await rest.put(
-        Routes.applicationCommands(CLIENT_ID), 
-        { body: SLASH_COMMANDS }
-      );
+      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: SLASH_COMMANDS });
       console.log("✅ Slash commands registered globally!");
     }
   } catch (err) {
@@ -128,7 +185,7 @@ client.once("ready", async () => {
   }
 
   client.user.setPresence({
-    activities: [{ name: "💳 /pay  |  /balance  |  /help", type: 0 }],
+    activities: [{ name: "💳 /pay  |  /buy  |  /balance", type: 0 }],
     status: "online"
   });
 });
@@ -196,8 +253,6 @@ async function getAccessPlusUsers() {
       continue;
     }
 
-    console.log(`[DEBUG] Guild "${guild.name}" — role "${role.name}" has ${role.members.size} member(s)`);
-
     for (const [, member] of role.members) {
       if (seen.has(member.id)) continue;
       seen.add(member.id);
@@ -243,6 +298,36 @@ async function addBalance(userId, amount) {
   return true;
 }
 
+async function deductBalance(userId, amount) {
+  const userIdStr = userId.toString();
+  amount = parseFloat(amount);
+  
+  const { data } = await supabase
+    .from("users")
+    .select("balance")
+    .eq("user_id", userIdStr)
+    .single();
+
+  if (!data) return false;
+  
+  const currentBalance = parseFloat(data.balance || 0);
+  if (currentBalance < amount) return false;
+  
+  const newBalance = currentBalance - amount;
+  
+  const { error } = await supabase
+    .from("users")
+    .update({ balance: newBalance })
+    .eq("user_id", userIdStr);
+    
+  if (error) {
+    console.error("❌ Deduct error:", error.message);
+    return false;
+  }
+  
+  return true;
+}
+
 async function getBalance(userId) {
   const { data } = await supabase
     .from("users")
@@ -251,6 +336,102 @@ async function getBalance(userId) {
     .single();
   return data ? parseFloat(data.balance || 0) : 0;
 }
+
+// ===== KEY HELPERS =====
+async function getAvailableKeyCount(productId) {
+  const { count } = await supabase
+    .from("keys")
+    .select("*", { count: "exact", head: true })
+    .eq("product_id", productId)
+    .eq("is_used", false);
+  return count || 0;
+}
+
+async function getRandomAvailableKey(productId) {
+  const { data, error } = await supabase
+    .from("keys")
+    .select("*")
+    .eq("product_id", productId)
+    .eq("is_used", false)
+    .limit(1)
+    .single();
+    
+  if (error || !data) return null;
+  return data;
+}
+
+async function markKeyAsUsed(keyId, userId) {
+  const { error } = await supabase
+    .from("keys")
+    .update({ 
+      is_used: true, 
+      used_by_user_id: userId.toString(),
+      used_at: new Date().toISOString()
+    })
+    .eq("id", keyId);
+    
+  return !error;
+}
+
+async function addKeys(productId, keys) {
+  const keyRecords = keys.map(key => ({
+    product_id: productId,
+    key_value: key.trim(),
+    is_used: false
+  }));
+  
+  const { error } = await supabase
+    .from("keys")
+    .insert(keyRecords);
+    
+  return !error;
+}
+
+async function getProductKeys(productId, page = 1, perPage = 10) {
+  const from = (page - 1) * perPage;
+  const to = from + perPage - 1;
+  
+  const { data, error, count } = await supabase
+    .from("keys")
+    .select("*", { count: "exact" })
+    .eq("product_id", productId)
+    .order("created_at", { ascending: false })
+    .range(from, to);
+    
+  if (error) return { keys: [], total: 0 };
+  return { keys: data || [], total: count || 0 };
+}
+
+async function deleteKey(keyId) {
+  const { error } = await supabase
+    .from("keys")
+    .delete()
+    .eq("id", keyId);
+    
+  return !error;
+}
+
+// ===== PRODUCT CONFIG =====
+const PRODUCTS = {
+  auto_joiner: {
+    id: "auto_joiner",
+    name: "Auto Joiner",
+    emoji: "🤖",
+    description: "Automatically join Discord servers",
+    tiers: [
+      { days: 1, price: 30, originalPrice: 60 },
+      { days: 2, price: 50, originalPrice: 80 },
+      { days: 3, price: 70, originalPrice: 100 }
+    ]
+  },
+  notifier: {
+    id: "notifier",
+    name: "Notifier",
+    emoji: "🔔",
+    description: "Get instant notifications",
+    comingSoon: true
+  }
+};
 
 // ===== CURRENCY CONFIG =====
 const CURRENCIES = {
@@ -299,12 +480,12 @@ function buildMainMenuEmbed() {
     .addFields(
       {
         name: "💳  Payments",
-        value: "`/pay` — Start a crypto top-up\n`/balance` — Check your balance",
+        value: "`/pay` — Start a crypto top-up\n`/balance` — Check your balance\n`/buy` — Purchase products",
         inline: true
       },
       {
         name: "🔧  Staff",
-        value: "`/forceadd` — Add balance to a user\n`/help` — Show this menu",
+        value: "`/forceadd` — Add balance to a user\n`/addkey` — Add product keys\n`/keylist` — Manage keys",
         inline: true
       },
       {
@@ -317,8 +498,8 @@ function buildMainMenuEmbed() {
       {
         name: "🔑  Access Roles",
         value:
-          `**${ROLE_ACCESS}** — Can use \`/forceadd\`\n` +
-          `**${ROLE_ACCESS_PLUS}** — \`/forceadd\` + receives payment notifications`,
+          `**${ROLE_ACCESS}** — Can use \`/forceadd\`, \`/addkey\`, \`/keylist\`\n` +
+          `**${ROLE_ACCESS_PLUS}** — All above + receives payment notifications`,
         inline: false
       }
     )
@@ -345,6 +526,38 @@ function buildBalanceEmbed(userId, balance, username) {
     .setColor(balance > 0 ? SUCCESS_COLOR : NEUTRAL_COLOR)
     .setFooter({ text: FOOTER_TEXT })
     .setTimestamp();
+}
+
+async function buildShopEmbed() {
+  const embed = new EmbedBuilder()
+    .setTitle("🛒  Product Shop")
+    .setDescription("Select a product to view pricing and purchase options.")
+    .setColor(BRAND_COLOR)
+    .setFooter({ text: FOOTER_TEXT })
+    .setTimestamp();
+
+  for (const [, product] of Object.entries(PRODUCTS)) {
+    if (product.comingSoon) {
+      embed.addFields({
+        name: `${product.emoji}  ${product.name}`,
+        value: `${product.description}\n\`🔜 Coming Soon\``,
+        inline: false
+      });
+    } else {
+      const stock = await getAvailableKeyCount(product.id);
+      const tierInfo = product.tiers.map(t => 
+        `**${t.days} day${t.days > 1 ? 's' : ''}** — ~~$${t.originalPrice}~~ **$${t.price}** 🔥`
+      ).join("\n");
+      
+      embed.addFields({
+        name: `${product.emoji}  ${product.name}`,
+        value: `${product.description}\n${tierInfo}\n📦 Stock: **${stock}** keys available`,
+        inline: false
+      });
+    }
+  }
+
+  return embed;
 }
 
 function buildPaymentEmbed(payment, currency) {
@@ -455,6 +668,38 @@ function buildCurrencyMenu(customId = "select_currency") {
   );
 }
 
+function buildProductMenu() {
+  const options = Object.entries(PRODUCTS).map(([id, product]) =>
+    new StringSelectMenuOptionBuilder()
+      .setLabel(product.name)
+      .setDescription(product.comingSoon ? "Coming Soon" : product.description)
+      .setValue(id)
+      .setEmoji(product.emoji)
+  );
+
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("select_product")
+      .setPlaceholder("🛒  Select a product...")
+      .addOptions(options)
+  );
+}
+
+function buildTierButtons(productId) {
+  const product = PRODUCTS[productId];
+  if (!product || product.comingSoon) return null;
+
+  const buttons = product.tiers.map(tier =>
+    new ButtonBuilder()
+      .setCustomId(`buy_${productId}_${tier.days}`)
+      .setLabel(`${tier.days} Day${tier.days > 1 ? 's' : ''} - $${tier.price}`)
+      .setStyle(ButtonStyle.Success)
+      .setEmoji("💳")
+  );
+
+  return new ActionRowBuilder().addComponents(...buttons);
+}
+
 function buildAmountRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId("amt_5").setLabel("$5").setStyle(ButtonStyle.Secondary),
@@ -463,6 +708,37 @@ function buildAmountRow() {
     new ButtonBuilder().setCustomId("amt_50").setLabel("$50").setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId("amt_custom").setLabel("✏️ Custom").setStyle(ButtonStyle.Success)
   );
+}
+
+function buildKeyListButtons(page, totalPages, productId) {
+  const buttons = [];
+  
+  if (page > 1) {
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(`keylist_${productId}_${page - 1}`)
+        .setLabel("◀️ Previous")
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
+  
+  buttons.push(
+    new ButtonBuilder()
+      .setCustomId(`keylist_refresh_${productId}_${page}`)
+      .setLabel("🔄 Refresh")
+      .setStyle(ButtonStyle.Primary)
+  );
+  
+  if (page < totalPages) {
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(`keylist_${productId}_${page + 1}`)
+        .setLabel("Next ▶️")
+        .setStyle(ButtonStyle.Secondary)
+    );
+  }
+  
+  return new ActionRowBuilder().addComponents(...buttons);
 }
 
 // ===== PENDING PAYMENTS =====
@@ -479,7 +755,8 @@ client.on("interactionCreate", async (interaction) => {
     if (commandName === "help") {
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId("btn_pay").setLabel("💳  Top Up").setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId("btn_balance").setLabel("💰  Balance").setStyle(ButtonStyle.Primary)
+        new ButtonBuilder().setCustomId("btn_balance").setLabel("💰  Balance").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("btn_buy").setLabel("🛒  Shop").setStyle(ButtonStyle.Success)
       );
       return interaction.reply({ embeds: [buildMainMenuEmbed()], components: [row], ephemeral: true });
     }
@@ -489,6 +766,16 @@ client.on("interactionCreate", async (interaction) => {
       const balance = await getBalance(interaction.user.id);
       return interaction.reply({
         embeds: [buildBalanceEmbed(interaction.user.id, balance, interaction.user.username)],
+        ephemeral: true
+      });
+    }
+
+    // /buy
+    if (commandName === "buy") {
+      const embed = await buildShopEmbed();
+      return interaction.reply({
+        embeds: [embed],
+        components: [buildProductMenu()],
         ephemeral: true
       });
     }
@@ -507,7 +794,163 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // /viewadmins — owner-only debug
+    // /addkey
+    if (commandName === "addkey") {
+      await interaction.deferReply({ ephemeral: true });
+
+      const tier = await getAccessTier(interaction.user.id);
+      if (!tier) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
+              .setColor(ERROR_COLOR)
+          ]
+        });
+      }
+
+      const productId = interaction.options.getString("product");
+      const keysText = interaction.options.getString("keys");
+      const file = interaction.options.getAttachment("file");
+
+      let keys = [];
+
+      if (keysText) {
+        keys = keysText.split(/[\s\n]+/).filter(k => k.trim().length > 0);
+      } else if (file) {
+        try {
+          const response = await axios.get(file.url);
+          const fileContent = response.data;
+          keys = fileContent.split(/[\s\n]+/).filter(k => k.trim().length > 0);
+        } catch (err) {
+          return interaction.editReply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("❌  File Error")
+                .setDescription("Could not read the file. Make sure it's a text file.")
+                .setColor(ERROR_COLOR)
+            ]
+          });
+        }
+      } else {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Invalid Input")
+              .setDescription("Please provide either keys as text or upload a file.")
+              .setColor(ERROR_COLOR)
+          ]
+        });
+      }
+
+      if (keys.length === 0) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  No Keys Found")
+              .setDescription("No valid keys were found in your input.")
+              .setColor(ERROR_COLOR)
+          ]
+        });
+      }
+
+      const success = await addKeys(productId, keys);
+
+      if (!success) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Database Error")
+              .setDescription("Failed to add keys. Check server logs.")
+              .setColor(ERROR_COLOR)
+          ]
+        });
+      }
+
+      const product = PRODUCTS[productId];
+      const newStock = await getAvailableKeyCount(productId);
+
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("✅  Keys Added Successfully")
+            .setDescription(`Added **${keys.length}** keys to **${product.name}**`)
+            .addFields(
+              { name: "📦 New Stock", value: `\`${newStock}\` keys available`, inline: true },
+              { name: "➕ Added By", value: `<@${interaction.user.id}>`, inline: true }
+            )
+            .setColor(SUCCESS_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
+    }
+
+    // /keylist
+    if (commandName === "keylist") {
+      await interaction.deferReply({ ephemeral: true });
+
+      const tier = await getAccessTier(interaction.user.id);
+      if (!tier) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
+              .setColor(ERROR_COLOR)
+          ]
+        });
+      }
+
+      const productId = interaction.options.getString("product");
+      const page = interaction.options.getInteger("page") || 1;
+      const perPage = 10;
+
+      const { keys, total } = await getProductKeys(productId, page, perPage);
+      const totalPages = Math.ceil(total / perPage);
+
+      const product = PRODUCTS[productId];
+      
+      if (keys.length === 0) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(`📋  ${product.name} Keys`)
+              .setDescription("No keys found for this product.")
+              .setColor(NEUTRAL_COLOR)
+          ]
+        });
+      }
+
+      const keyList = keys.map((key, idx) => {
+        const num = (page - 1) * perPage + idx + 1;
+        const status = key.is_used ? "❌ Used" : "✅ Available";
+        const keyPreview = key.key_value.substring(0, 20) + "...";
+        return `**${num}.** \`${keyPreview}\` — ${status}`;
+      }).join("\n");
+
+      const embed = new EmbedBuilder()
+        .setTitle(`📋  ${product.name} Keys`)
+        .setDescription(keyList)
+        .addFields(
+          { name: "📊 Total Keys", value: `\`${total}\``, inline: true },
+          { name: "📄 Page", value: `\`${page} / ${totalPages}\``, inline: true },
+          { name: "✅ Available", value: `\`${keys.filter(k => !k.is_used).length}\``, inline: true }
+        )
+        .setColor(BRAND_COLOR)
+        .setFooter({ text: `Use buttons to navigate • ${FOOTER_TEXT}` })
+        .setTimestamp();
+
+      const row = buildKeyListButtons(page, totalPages, productId);
+
+      return interaction.editReply({
+        embeds: [embed],
+        components: row ? [row] : []
+      });
+    }
+
+    // /viewadmins
     if (commandName === "viewadmins") {
       if (interaction.user.id !== OWNER_ID) {
         return interaction.reply({
@@ -548,14 +991,6 @@ client.on("interactionCreate", async (interaction) => {
             r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_ACCESS_PLUS)
           );
         }
-
-        console.log(
-          `[DEBUG /viewadmins] Guild: "${guild.name}" | All roles:`,
-          guild.roles.cache.map(r => `"${r.name}" (${r.id})`).join(", ")
-        );
-        console.log(
-          `[DEBUG /viewadmins] roleBasic: ${roleBasic?.name ?? "NOT FOUND"} | rolePlus: ${rolePlus?.name ?? "NOT FOUND"}`
-        );
 
         if (rolePlus) {
           for (const [, member] of rolePlus.members) {
@@ -604,7 +1039,7 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.editReply({ embeds: [embed] });
     }
 
-    // /forceadd — requires Pay Access or Pay Access+
+    // /forceadd
     if (commandName === "forceadd") {
       await interaction.deferReply({ ephemeral: true });
 
@@ -656,7 +1091,6 @@ client.on("interactionCreate", async (interaction) => {
         embeds: [buildForceAddEmbed(targetUser, amount, newBalance, interaction.user)]
       });
 
-      // DM the credited user
       try {
         const dmEmbed = new EmbedBuilder()
           .setTitle("🎉  Balance Added!")
@@ -700,6 +1134,167 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
+    if (interaction.customId === "btn_buy") {
+      const embed = await buildShopEmbed();
+      return interaction.reply({
+        embeds: [embed],
+        components: [buildProductMenu()],
+        ephemeral: true
+      });
+    }
+
+    // Buy product buttons
+    if (interaction.customId.startsWith("buy_")) {
+      await interaction.deferReply({ ephemeral: true });
+
+      const parts = interaction.customId.split("_");
+      const productId = parts[1];
+      const days = parseInt(parts[2]);
+
+      const product = PRODUCTS[productId];
+      const tier = product.tiers.find(t => t.days === days);
+
+      if (!tier) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Invalid Product")
+              .setDescription("This product tier could not be found.")
+              .setColor(ERROR_COLOR)
+          ]
+        });
+      }
+
+      const balance = await getBalance(interaction.user.id);
+
+      if (balance < tier.price) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("💰  Insufficient Balance")
+              .setDescription(
+                `You need **$${tier.price.toFixed(2)}** but only have **$${balance.toFixed(2)}**.\n` +
+                `Missing: **$${(tier.price - balance).toFixed(2)}**\n\n` +
+                `Use \`/pay\` to top up your balance.`
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const key = await getRandomAvailableKey(productId);
+
+      if (!key) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("📦  Out of Stock")
+              .setDescription(`${product.name} is currently out of stock. Please check back later.`)
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const deducted = await deductBalance(interaction.user.id, tier.price);
+      if (!deducted) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Payment Failed")
+              .setDescription("Could not process payment. Please try again.")
+              .setColor(ERROR_COLOR)
+          ]
+        });
+      }
+
+      await markKeyAsUsed(key.id, interaction.user.id);
+
+      const newBalance = await getBalance(interaction.user.id);
+      const stock = await getAvailableKeyCount(productId);
+
+      await interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("✅  Purchase Successful!")
+            .setDescription(`You've purchased **${product.name}** — ${tier.days} day${tier.days > 1 ? 's' : ''}`)
+            .addFields(
+              { name: "💵 Price", value: `\`$${tier.price}\``, inline: true },
+              { name: "💰 New Balance", value: `\`$${newBalance.toFixed(2)}\``, inline: true },
+              { name: "📦 Remaining Stock", value: `\`${stock} keys\``, inline: true }
+            )
+            .setColor(SUCCESS_COLOR)
+            .setFooter({ text: "Your key has been sent to your DMs • " + FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
+
+      try {
+        await interaction.user.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(`🔑  ${product.name} Key`)
+              .setDescription(`Your **${tier.days} day${tier.days > 1 ? 's' : ''}** license key:`)
+              .addFields(
+                { name: "🔐 License Key", value: `\`\`\`\n${key.key_value}\n\`\`\``, inline: false },
+                { name: "⏱️ Duration", value: `\`${tier.days} day${tier.days > 1 ? 's' : ''}\``, inline: true },
+                { name: "💵 Price", value: `\`$${tier.price}\``, inline: true }
+              )
+              .setColor(SUCCESS_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      } catch {
+        console.log(`⚠️ Could not DM key to ${interaction.user.tag}`);
+      }
+
+      return;
+    }
+
+    // Key list pagination
+    if (interaction.customId.startsWith("keylist_")) {
+      await interaction.deferUpdate();
+
+      const parts = interaction.customId.split("_");
+      const isRefresh = parts[1] === "refresh";
+      const productId = isRefresh ? parts[2] : parts[1];
+      const page = parseInt(isRefresh ? parts[3] : parts[2]);
+      const perPage = 10;
+
+      const { keys, total } = await getProductKeys(productId, page, perPage);
+      const totalPages = Math.ceil(total / perPage);
+
+      const product = PRODUCTS[productId];
+
+      const keyList = keys.map((key, idx) => {
+        const num = (page - 1) * perPage + idx + 1;
+        const status = key.is_used ? "❌ Used" : "✅ Available";
+        const keyPreview = key.key_value.substring(0, 20) + "...";
+        return `**${num}.** \`${keyPreview}\` — ${status}`;
+      }).join("\n");
+
+      const embed = new EmbedBuilder()
+        .setTitle(`📋  ${product.name} Keys`)
+        .setDescription(keyList)
+        .addFields(
+          { name: "📊 Total Keys", value: `\`${total}\``, inline: true },
+          { name: "📄 Page", value: `\`${page} / ${totalPages}\``, inline: true },
+          { name: "✅ Available", value: `\`${keys.filter(k => !k.is_used).length}\``, inline: true }
+        )
+        .setColor(BRAND_COLOR)
+        .setFooter({ text: `Use buttons to navigate • ${FOOTER_TEXT}` })
+        .setTimestamp();
+
+      const row = buildKeyListButtons(page, totalPages, productId);
+
+      return interaction.editReply({
+        embeds: [embed],
+        components: row ? [row] : []
+      });
+    }
+
     if (interaction.customId.startsWith("amt_")) {
       const userId  = interaction.user.id;
       const pending = pendingPayments.get(userId);
@@ -739,19 +1334,62 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   // ──────────── SELECT MENUS ────────────
-  if (interaction.isStringSelectMenu() && interaction.customId === "pay_currency") {
-    const currency = interaction.values[0];
-    const userId   = interaction.user.id;
-    pendingPayments.set(userId, { currency, amount: null });
+  if (interaction.isStringSelectMenu()) {
+    if (interaction.customId === "select_product") {
+      const productId = interaction.values[0];
+      const product = PRODUCTS[productId];
 
-    const cur = CURRENCIES[currency];
-    const embed = new EmbedBuilder()
-      .setTitle(`${cur.emoji}  ${cur.name} Selected`)
-      .setDescription("**Step 2 / 2** — Choose an amount to deposit.")
-      .setColor(cur.color)
-      .setFooter({ text: FOOTER_TEXT });
+      if (product.comingSoon) {
+        return interaction.update({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle(`${product.emoji}  ${product.name}`)
+              .setDescription(`${product.description}\n\n🔜 **Coming Soon**\n\nThis product is currently under development.`)
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          components: []
+        });
+      }
 
-    return interaction.update({ embeds: [embed], components: [buildAmountRow()] });
+      const stock = await getAvailableKeyCount(productId);
+      const tierInfo = product.tiers.map(t => 
+        `**${t.days} day${t.days > 1 ? 's' : ''}** — ~~$${t.originalPrice}~~ **$${t.price}** 🔥 (Save $${t.originalPrice - t.price})`
+      ).join("\n");
+
+      const embed = new EmbedBuilder()
+        .setTitle(`${product.emoji}  ${product.name}`)
+        .setDescription(
+          `${product.description}\n\n` +
+          `**💰 Pricing (Special Discount!):**\n${tierInfo}\n\n` +
+          `📦 **Stock:** ${stock} keys available`
+        )
+        .setColor(BRAND_COLOR)
+        .setFooter({ text: "Select a tier below to purchase • " + FOOTER_TEXT })
+        .setTimestamp();
+
+      const row = buildTierButtons(productId);
+
+      return interaction.update({
+        embeds: [embed],
+        components: row ? [row] : []
+      });
+    }
+
+    if (interaction.customId === "pay_currency") {
+      const currency = interaction.values[0];
+      const userId   = interaction.user.id;
+      pendingPayments.set(userId, { currency, amount: null });
+
+      const cur = CURRENCIES[currency];
+      const embed = new EmbedBuilder()
+        .setTitle(`${cur.emoji}  ${cur.name} Selected`)
+        .setDescription("**Step 2 / 2** — Choose an amount to deposit.")
+        .setColor(cur.color)
+        .setFooter({ text: FOOTER_TEXT });
+
+      return interaction.update({ embeds: [embed], components: [buildAmountRow()] });
+    }
   }
 
   // ──────────── MODAL SUBMITS ────────────
