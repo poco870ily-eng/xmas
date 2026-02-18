@@ -1403,6 +1403,22 @@ client.on("interactionCreate", async (interaction) => {
         });
 
         try {
+          // Create text file with the key
+          const keyFileContent = `${product.name} License Key\n` +
+                                `========================\n\n` +
+                                `Product: ${product.name}\n` +
+                                `Duration: ${tier.days} day${tier.days > 1 ? "s" : ""}\n` +
+                                `Price: $${tier.price}\n` +
+                                `Purchase Date: ${new Date().toISOString()}\n\n` +
+                                `License Key:\n${key.key_value}\n\n` +
+                                `========================\n` +
+                                `Keep this key safe and secure.\n`;
+          
+          const keyAttachment = new AttachmentBuilder(
+            Buffer.from(keyFileContent, 'utf-8'),
+            { name: `${product.name.replace(/\s+/g, '_')}_Key_${Date.now()}.txt` }
+          );
+
           await interaction.user.send({
             embeds: [
               new EmbedBuilder()
@@ -1416,7 +1432,8 @@ client.on("interactionCreate", async (interaction) => {
                 .setColor(SUCCESS_COLOR)
                 .setFooter({ text: FOOTER_TEXT })
                 .setTimestamp()
-            ]
+            ],
+            files: [keyAttachment]
           });
           console.log(`📬 Key sent to ${interaction.user.tag}`);
         } catch (dmErr) {
@@ -1906,84 +1923,112 @@ app.post("/webhook", async (req, res) => {
     // Get saved payment message info
     const msgInfo = await getPaymentMessage(payment_id);
     
-    if (msgInfo) {
-      // Try to edit the existing message
-      try {
-        const user = await client.users.fetch(msgInfo.userId);
-        const channel = await user.createDM();
-        const message = await channel.messages.fetch(msgInfo.messageId);
-        
-        const embed = new EmbedBuilder()
-          .setTitle(`${cfg.icon}  ${cfg.title}`)
-          .setDescription(cfg.desc)
-          .setColor(cfg.color)
-          .setFooter({ text: `Payment ID: ${payment_id} • ${FOOTER_TEXT}` })
-          .setTimestamp();
+    // Handle finished payment - add balance and send notifications
+    if (status === "finished") {
+      const success    = await addBalance(userId, amount);
+      const newBalance = await getBalance(userId);
+      
+      const embed = new EmbedBuilder()
+        .setTitle(`${cfg.icon}  ${cfg.title}`)
+        .setDescription(cfg.desc)
+        .setColor(cfg.color)
+        .setFooter({ text: `Payment ID: ${payment_id} • ${FOOTER_TEXT}` })
+        .setTimestamp();
 
-        if (status === "finished") {
-          const success    = await addBalance(userId, amount);
-          const newBalance = await getBalance(userId);
+      embed.addFields(
+        { name: "➕ Amount Added", value: `\`+${amount.toFixed(2)} USD\``,    inline: true },
+        { name: "💰 New Balance",  value: `\`${newBalance.toFixed(2)} USD\``, inline: true }
+      );
 
-          embed.addFields(
-            { name: "➕ Amount Added", value: `\`+${amount.toFixed(2)} USD\``,    inline: true },
-            { name: "💰 New Balance",  value: `\`${newBalance.toFixed(2)} USD\``, inline: true }
-          );
+      if (!success) {
+        embed.setColor(ERROR_COLOR)
+             .setTitle("⚠️  Payment OK — Balance Update Failed")
+             .setDescription("Payment received but balance update failed. Contact support.");
+      }
 
-          if (!success) {
-            embed.setColor(ERROR_COLOR)
-                 .setTitle("⚠️  Payment OK — Balance Update Failed")
-                 .setDescription("Payment received but balance update failed. Contact support.");
-          }
-
-          // Edit the message with updated status
+      // Try to edit existing message if available
+      if (msgInfo) {
+        try {
+          const user = await client.users.fetch(msgInfo.userId);
+          const channel = await user.createDM();
+          const message = await channel.messages.fetch(msgInfo.messageId);
           await message.edit({ embeds: [embed] });
+          console.log(`✅ Updated payment message for ${payment_id}`);
+        } catch (editErr) {
+          console.error(`❌ Could not edit message for payment ${payment_id}:`, editErr.message);
+          // Fallback: send new message
+          const payerUser = await client.users.fetch(userId).catch(() => null);
+          if (payerUser) {
+            await payerUser.send({ embeds: [embed] }).catch(() => {});
+          }
+        }
+      } else {
+        // No saved message, send new one
+        console.log(`⚠️ No saved message for payment ${payment_id}, sending new message`);
+        const payerUser = await client.users.fetch(userId).catch(() => null);
+        if (payerUser) {
+          await payerUser.send({ embeds: [embed] }).catch(() => {});
+        }
+      }
 
-          // Send notifications to Pay Access+ users
-          if (success) {
-            const payerUser = await client.users.fetch(userId).catch(() => null);
-            if (payerUser) {
-              const notifyEmbed = buildPaymentNotifyEmbed(payerUser, amount, newBalance, payment_id);
-              const plusUsers   = await getAccessPlusUsers();
+      // ALWAYS send Pay Access+ notifications on successful payment
+      if (success) {
+        const payerUser = await client.users.fetch(userId).catch(() => null);
+        if (payerUser) {
+          const notifyEmbed = buildPaymentNotifyEmbed(payerUser, amount, newBalance, payment_id);
+          const plusUsers   = await getAccessPlusUsers();
 
-              let notified = 0;
-              for (const user of plusUsers) {
-                if (user.id === userId) continue;
-                try {
-                  await user.send({ embeds: [notifyEmbed] });
-                  notified++;
-                } catch {
-                  console.log(`⚠️ Could not DM Pay Access+ user ${user.tag}`);
-                }
-              }
-              console.log(`📣 Notified ${notified} Pay Access+ member(s) about payment by ${payerUser.tag}`);
+          let notified = 0;
+          for (const user of plusUsers) {
+            if (user.id === userId) continue;
+            try {
+              await user.send({ embeds: [notifyEmbed] });
+              notified++;
+              console.log(`✅ Notified Pay Access+ user ${user.tag}`);
+            } catch (err) {
+              console.log(`⚠️ Could not DM Pay Access+ user ${user.tag}:`, err.message);
             }
           }
-
-        } else if (["confirming", "confirmed"].includes(status)) {
-          embed.addFields(
-            { name: "💵  Amount",   value: `\`${amount} USD\``,  inline: true },
-            { name: "🪙  Currency", value: `\`${pay_currency}\``, inline: true }
-          );
-          
-          // Edit the message with updated status
-          await message.edit({ embeds: [embed] });
-          
-        } else if (["failed", "expired"].includes(status)) {
-          // Edit the message with final status
-          await message.edit({ embeds: [embed] });
+          console.log(`📣 Notified ${notified} Pay Access+ member(s) about payment by ${payerUser.tag}`);
+        } else {
+          console.error(`⚠️ Could not fetch payer user ${userId} for notifications`);
         }
-
-        console.log(`✅ Updated payment message for ${payment_id}`);
-        
-      } catch (editErr) {
-        console.error(`❌ Could not edit message for payment ${payment_id}:`, editErr.message);
-        // Fallback: send new message if editing fails
-        await sendPaymentStatusMessage(userId, status, amount, pay_currency, payment_id);
       }
-    } else {
-      // No saved message found, send new message
-      console.log(`⚠️ No saved message for payment ${payment_id}, sending new message`);
-      await sendPaymentStatusMessage(userId, status, amount, pay_currency, payment_id);
+
+    } else if (["confirming", "confirmed", "failed", "expired"].includes(status)) {
+      // Handle other statuses - just update the message
+      const embed = new EmbedBuilder()
+        .setTitle(`${cfg.icon}  ${cfg.title}`)
+        .setDescription(cfg.desc)
+        .setColor(cfg.color)
+        .setFooter({ text: `Payment ID: ${payment_id} • ${FOOTER_TEXT}` })
+        .setTimestamp();
+
+      if (["confirming", "confirmed"].includes(status)) {
+        embed.addFields(
+          { name: "💵  Amount",   value: `\`${amount} USD\``,  inline: true },
+          { name: "🪙  Currency", value: `\`${pay_currency}\``, inline: true }
+        );
+      }
+
+      if (msgInfo) {
+        try {
+          const user = await client.users.fetch(msgInfo.userId);
+          const channel = await user.createDM();
+          const message = await channel.messages.fetch(msgInfo.messageId);
+          await message.edit({ embeds: [embed] });
+          console.log(`✅ Updated payment message for ${payment_id} (status: ${status})`);
+        } catch (editErr) {
+          console.error(`❌ Could not edit message for payment ${payment_id}:`, editErr.message);
+          // Fallback: send new message
+          const user = await client.users.fetch(userId).catch(() => null);
+          if (user) await user.send({ embeds: [embed] }).catch(() => {});
+        }
+      } else {
+        // No saved message, send new one
+        const user = await client.users.fetch(userId).catch(() => null);
+        if (user) await user.send({ embeds: [embed] }).catch(() => {});
+      }
     }
 
   } catch (err) {
@@ -1992,67 +2037,6 @@ app.post("/webhook", async (req, res) => {
 
   res.sendStatus(200);
 });
-
-// Helper function to send payment status message (fallback)
-async function sendPaymentStatusMessage(userId, status, amount, pay_currency, payment_id) {
-  const cfg = STATUS_CONFIG[status];
-  
-  const embed = new EmbedBuilder()
-    .setTitle(`${cfg.icon}  ${cfg.title}`)
-    .setDescription(cfg.desc)
-    .setColor(cfg.color)
-    .setFooter({ text: `Payment ID: ${payment_id} • ${FOOTER_TEXT}` })
-    .setTimestamp();
-
-  if (status === "finished") {
-    const success    = await addBalance(userId, amount);
-    const newBalance = await getBalance(userId);
-
-    embed.addFields(
-      { name: "➕ Amount Added", value: `\`+${amount.toFixed(2)} USD\``,    inline: true },
-      { name: "💰 New Balance",  value: `\`${newBalance.toFixed(2)} USD\``, inline: true }
-    );
-
-    if (!success) {
-      embed.setColor(ERROR_COLOR)
-           .setTitle("⚠️  Payment OK — Balance Update Failed")
-           .setDescription("Payment received but balance update failed. Contact support.");
-    }
-
-    const payerUser = await client.users.fetch(userId).catch(() => null);
-    if (payerUser) {
-      await payerUser.send({ embeds: [embed] }).catch(() => {});
-    }
-
-    if (success && payerUser) {
-      const notifyEmbed = buildPaymentNotifyEmbed(payerUser, amount, newBalance, payment_id);
-      const plusUsers   = await getAccessPlusUsers();
-
-      let notified = 0;
-      for (const user of plusUsers) {
-        if (user.id === userId) continue;
-        try {
-          await user.send({ embeds: [notifyEmbed] });
-          notified++;
-        } catch {
-          console.log(`⚠️ Could not DM Pay Access+ user ${user.tag}`);
-        }
-      }
-      console.log(`📣 Notified ${notified} Pay Access+ member(s) about payment by ${payerUser.tag}`);
-    }
-
-  } else {
-    if (["waiting", "confirming", "confirmed"].includes(status)) {
-      embed.addFields(
-        { name: "💵 Amount",   value: `\`${amount} USD\``,  inline: true },
-        { name: "🪙 Currency", value: `\`${pay_currency}\``, inline: true }
-      );
-    }
-
-    const user = await client.users.fetch(userId).catch(() => null);
-    if (user) await user.send({ embeds: [embed] }).catch(() => {});
-  }
-}
 
 app.listen(PORT, () => console.log(`🌐 Webhook server on port ${PORT}`));
 client.login(DISCORD_TOKEN);
