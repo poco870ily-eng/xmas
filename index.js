@@ -1208,9 +1208,10 @@ client.on("interactionCreate", async (interaction) => {
       console.log(`🛒 Purchase initiated by ${interaction.user.tag}`);
       await interaction.deferReply({ ephemeral: true });
 
-      const parts = interaction.customId.split("_");
-      const productId = parts[1];
-      const days = parseInt(parts[2]);
+      const withoutPrefix = interaction.customId.slice("buy_".length); // "auto_joiner_1"
+      const lastUnderscore = withoutPrefix.lastIndexOf("_");
+      const productId = withoutPrefix.substring(0, lastUnderscore);     // "auto_joiner"
+      const days = parseInt(withoutPrefix.substring(lastUnderscore + 1)); // 1
 
       console.log(`📦 Product: ${productId}, Days: ${days}`);
 
