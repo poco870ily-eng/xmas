@@ -112,7 +112,18 @@ const SLASH_COMMANDS = [
         required: true,
         choices: [
           { name: "Auto Joiner", value: "auto_joiner" },
-          { name: "Notifier", value: "notifier" }
+          { name: "Notifier",    value: "notifier" }
+        ]
+      },
+      {
+        name: "tier",
+        description: "Tier / duration (required for Auto Joiner)",
+        type: ApplicationCommandOptionType.Integer,
+        required: false,
+        choices: [
+          { name: "1 Day",  value: 1 },
+          { name: "2 Days", value: 2 },
+          { name: "3 Days", value: 3 }
         ]
       },
       {
@@ -131,7 +142,7 @@ const SLASH_COMMANDS = [
   },
   {
     name: "keylist",
-    description: "📋 [Pay Access] View and manage product keys",
+    description: "📋 [Pay Access] View and manage available product keys",
     dm_permission: false,
     options: [
       {
@@ -141,7 +152,18 @@ const SLASH_COMMANDS = [
         required: true,
         choices: [
           { name: "Auto Joiner", value: "auto_joiner" },
-          { name: "Notifier", value: "notifier" }
+          { name: "Notifier",    value: "notifier" }
+        ]
+      },
+      {
+        name: "tier",
+        description: "Tier / duration (required for Auto Joiner)",
+        type: ApplicationCommandOptionType.Integer,
+        required: false,
+        choices: [
+          { name: "1 Day",  value: 1 },
+          { name: "2 Days", value: 2 },
+          { name: "3 Days", value: 3 }
         ]
       },
       {
@@ -163,11 +185,11 @@ client.once("ready", async () => {
 
   try {
     console.log("🔄 Registering slash commands...");
-    
+
     if (GUILD_ID) {
       await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
       console.log("🗑️  Cleared global commands to prevent duplicates");
-      
+
       await rest.put(
         Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
         { body: SLASH_COMMANDS }
@@ -299,7 +321,7 @@ async function deductBalance(userId, amount) {
   console.log(`💸 deductBalance: userId=${userId}, amount=${amount}`);
   const userIdStr = userId.toString();
   amount = parseFloat(amount);
-  
+
   const { data, error: selectError } = await supabase
     .from("users")
     .select("balance")
@@ -315,27 +337,27 @@ async function deductBalance(userId, amount) {
     console.log("⚠️ User not found in database");
     return false;
   }
-  
+
   const currentBalance = parseFloat(data.balance || 0);
   console.log(`📊 Current balance: ${currentBalance}, trying to deduct: ${amount}`);
-  
+
   if (currentBalance < amount) {
     console.log("⚠️ Insufficient balance");
     return false;
   }
-  
+
   const newBalance = currentBalance - amount;
-  
+
   const { error } = await supabase
     .from("users")
     .update({ balance: newBalance })
     .eq("user_id", userIdStr);
-    
+
   if (error) {
     console.error("❌ Deduct error:", error.message);
     return false;
   }
-  
+
   console.log(`✅ Balance deducted. New balance: ${newBalance}`);
   return true;
 }
@@ -350,43 +372,54 @@ async function getBalance(userId) {
 }
 
 // ===== KEY HELPERS =====
-async function getAvailableKeyCount(productId) {
-  console.log(`🔍 Counting available keys for product: ${productId}`);
+
+/**
+ * Returns the storage product_id for a given product + optional days tier.
+ * Auto Joiner keys are stored per-tier: "auto_joiner_1", "auto_joiner_2", "auto_joiner_3"
+ * Other products keep their plain id.
+ */
+function resolveStorageId(productId, days = null) {
+  if (productId === "auto_joiner" && days) return `${productId}_${days}`;
+  return productId;
+}
+
+async function getAvailableKeyCount(storageId) {
+  console.log(`🔍 Counting available keys for storageId: ${storageId}`);
   const { count, error } = await supabase
     .from("keys")
     .select("*", { count: "exact", head: true })
-    .eq("product_id", productId)
+    .eq("product_id", storageId)
     .eq("is_used", false);
-  
+
   if (error) {
     console.error("❌ Error counting keys:", error.message);
     return 0;
   }
-  
+
   console.log(`📊 Available keys: ${count || 0}`);
   return count || 0;
 }
 
-async function getRandomAvailableKey(productId) {
-  console.log(`🔑 Getting random key for product: ${productId}`);
-  
+async function getRandomAvailableKey(storageId) {
+  console.log(`🔑 Getting random key for storageId: ${storageId}`);
+
   const { data, error } = await supabase
     .from("keys")
     .select("*")
-    .eq("product_id", productId)
+    .eq("product_id", storageId)
     .eq("is_used", false)
     .limit(1);
-    
+
   if (error) {
     console.error("❌ Error fetching key:", error.message);
     return null;
   }
-  
+
   if (!data || data.length === 0) {
     console.log("⚠️ No available keys found");
     return null;
   }
-  
+
   console.log(`✅ Found key: ${data[0].key_value.substring(0, 10)}...`);
   return data[0];
 }
@@ -395,61 +428,63 @@ async function markKeyAsUsed(keyId, userId) {
   console.log(`🔒 Marking key ${keyId} as used by ${userId}`);
   const { error } = await supabase
     .from("keys")
-    .update({ 
-      is_used: true, 
+    .update({
+      is_used: true,
       used_by_user_id: userId.toString(),
       used_at: new Date().toISOString()
     })
     .eq("id", keyId);
-    
+
   if (error) {
     console.error("❌ Error marking key as used:", error.message);
     return false;
   }
-  
+
   console.log("✅ Key marked as used");
   return true;
 }
 
-async function addKeys(productId, keys) {
-  console.log(`➕ Adding ${keys.length} keys for product: ${productId}`);
+async function addKeys(storageId, keys) {
+  console.log(`➕ Adding ${keys.length} keys for storageId: ${storageId}`);
   const keyRecords = keys.map(key => ({
-    product_id: productId,
-    key_value: key.trim(),
-    is_used: false
+    product_id: storageId,
+    key_value:  key.trim(),
+    is_used:    false
   }));
-  
-  const { error } = await supabase
-    .from("keys")
-    .insert(keyRecords);
-    
+
+  const { error } = await supabase.from("keys").insert(keyRecords);
+
   if (error) {
     console.error("❌ Error adding keys:", error.message);
     return false;
   }
-  
+
   console.log("✅ Keys added successfully");
   return true;
 }
 
-async function getProductKeys(productId, page = 1, perPage = 10) {
-  console.log(`📋 Getting keys for product: ${productId}, page: ${page}`);
+/**
+ * Returns only AVAILABLE (not used) keys for the given storageId.
+ */
+async function getAvailableProductKeys(storageId, page = 1, perPage = 10) {
+  console.log(`📋 Getting available keys for storageId: ${storageId}, page: ${page}`);
   const from = (page - 1) * perPage;
-  const to = from + perPage - 1;
-  
+  const to   = from + perPage - 1;
+
   const { data, error, count } = await supabase
     .from("keys")
     .select("*", { count: "exact" })
-    .eq("product_id", productId)
+    .eq("product_id", storageId)
+    .eq("is_used", false)
     .order("created_at", { ascending: false })
     .range(from, to);
-    
+
   if (error) {
     console.error("❌ Error getting keys:", error.message);
     return { keys: [], total: 0 };
   }
-  
-  console.log(`📊 Found ${count || 0} total keys, returning ${data?.length || 0} for this page`);
+
+  console.log(`📊 Found ${count || 0} available keys, returning ${data?.length || 0} for this page`);
   return { keys: data || [], total: count || 0 };
 }
 
@@ -459,12 +494,12 @@ async function deleteKey(keyId) {
     .from("keys")
     .delete()
     .eq("id", keyId);
-    
+
   if (error) {
     console.error("❌ Error deleting key:", error.message);
     return false;
   }
-  
+
   console.log("✅ Key deleted");
   return true;
 }
@@ -472,9 +507,9 @@ async function deleteKey(keyId) {
 // ===== PRODUCT CONFIG =====
 const PRODUCTS = {
   auto_joiner: {
-    id: "auto_joiner",
-    name: "Auto Joiner",
-    emoji: "🤖",
+    id:          "auto_joiner",
+    name:        "Auto Joiner",
+    emoji:       "🤖",
     description: "Automatically join Discord servers",
     tiers: [
       { days: 1, price: 30, originalPrice: 60 },
@@ -483,11 +518,11 @@ const PRODUCTS = {
     ]
   },
   notifier: {
-    id: "notifier",
-    name: "Notifier",
-    emoji: "🔔",
+    id:          "notifier",
+    name:        "Notifier",
+    emoji:       "🔔",
     description: "Get instant notifications",
-    comingSoon: true
+    comingSoon:  true
   }
 };
 
@@ -525,36 +560,37 @@ const NEUTRAL_COLOR = 0x99AAB5;
 const ADMIN_COLOR   = 0xE67E22;
 const PLUS_COLOR    = 0xA855F7;
 
-const FOOTER_TEXT = "⚡ Powered by NOWPayments • Instant Crypto Processing";
+// ✅ Updated footer branding
+const FOOTER_TEXT = "⚡ Nameless Paysystem";
 
 // ===== EMBEDS =====
 function buildMainMenuEmbed() {
   return new EmbedBuilder()
-    .setTitle("🏦  Crypto Payment Bot")
+    .setTitle("🏦  Nameless Paysystem")
     .setDescription(
       "**Secure · Instant · Anonymous**\n" +
       "```\nTop up your balance using cryptocurrency\n```"
     )
     .addFields(
       {
-        name: "💳  Payments",
-        value: "`/pay` — Start a crypto top-up\n`/balance` — Check your balance\n`/buy` — Purchase products",
+        name:   "💳  Payments",
+        value:  "`/pay` — Start a crypto top-up\n`/balance` — Check your balance\n`/buy` — Purchase products",
         inline: true
       },
       {
-        name: "🔧  Staff",
-        value: "`/forceadd` — Add balance to a user\n`/addkey` — Add product keys\n`/keylist` — Manage keys",
+        name:   "🔧  Staff",
+        value:  "`/forceadd` — Add balance to a user\n`/addkey` — Add product keys\n`/keylist` — Manage keys",
         inline: true
       },
       {
-        name: "🪙  Supported Currencies",
-        value: Object.entries(CURRENCIES)
+        name:   "🪙  Supported Currencies",
+        value:  Object.entries(CURRENCIES)
           .map(([code, c]) => `${c.emoji} **${code}** — ${c.name}`)
           .join("\n"),
         inline: false
       },
       {
-        name: "🔑  Access Roles",
+        name:   "🔑  Access Roles",
         value:
           `**${ROLE_ACCESS}** — Can use \`/forceadd\`, \`/addkey\`, \`/keylist\`\n` +
           `**${ROLE_ACCESS_PLUS}** — All above + receives payment notifications`,
@@ -597,19 +633,24 @@ async function buildShopEmbed() {
   for (const [, product] of Object.entries(PRODUCTS)) {
     if (product.comingSoon) {
       embed.addFields({
-        name: `${product.emoji}  ${product.name}`,
-        value: `${product.description}\n\`🔜 Coming Soon\``,
+        name:   `${product.emoji}  ${product.name}`,
+        value:  `${product.description}\n\`🔜 Coming Soon\``,
         inline: false
       });
     } else {
-      const stock = await getAvailableKeyCount(product.id);
-      const tierInfo = product.tiers.map(t => 
-        `**${t.days} day${t.days > 1 ? 's' : ''}** — ~~$${t.originalPrice}~~ **$${t.price}** 🔥`
-      ).join("\n");
-      
+      // Show per-tier stock
+      const tierInfo = await Promise.all(
+        product.tiers.map(async t => {
+          const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
+          return (
+            `**${t.days} day${t.days > 1 ? "s" : ""}** — ~~$${t.originalPrice}~~ **$${t.price}** 🔥  📦 \`${stock}\` in stock`
+          );
+        })
+      );
+
       embed.addFields({
-        name: `${product.emoji}  ${product.name}`,
-        value: `${product.description}\n${tierInfo}\n📦 Stock: **${stock}** keys available`,
+        name:   `${product.emoji}  ${product.name}`,
+        value:  `${product.description}\n${tierInfo.join("\n")}`,
         inline: false
       });
     }
@@ -628,7 +669,7 @@ function buildPaymentEmbed(payment, currency) {
     )
     .addFields(
       {
-        name: "📬  Deposit Address",
+        name:  "📬  Deposit Address",
         value: payment.pay_address
           ? `\`\`\`\n${payment.pay_address}\n\`\`\``
           : "`Address pending...`"
@@ -636,7 +677,7 @@ function buildPaymentEmbed(payment, currency) {
       { name: "💸  Amount",    value: `\`${payment.pay_amount} ${payment.pay_currency}\``, inline: true },
       { name: "💵  USD Value", value: `\`${payment.price_amount} USD\``,                   inline: true },
       {
-        name: "⏱️  Expires",
+        name:  "⏱️  Expires",
         value: payment.expiration_estimate_date
           ? `<t:${Math.floor(new Date(payment.expiration_estimate_date).getTime() / 1000)}:R>`
           : "`~20 minutes`",
@@ -645,7 +686,7 @@ function buildPaymentEmbed(payment, currency) {
       { name: "🔑  Payment ID", value: `\`${payment.payment_id}\``, inline: false }
     )
     .setColor(cur.color)
-    .setFooter({ text: "📬 You'll receive a DM when payment is confirmed" })
+    .setFooter({ text: "📬 You'll receive a DM when payment is confirmed • " + FOOTER_TEXT })
     .setTimestamp();
 }
 
@@ -654,8 +695,8 @@ function buildForceAddEmbed(targetUser, amount, newBalance, executedBy) {
     .setTitle("🔧  Manual Balance Credit")
     .setDescription(`Balance credited to **@${targetUser.username}** by **@${executedBy.username}**`)
     .addFields(
-      { name: "➕  Amount Added", value: `\`+${amount.toFixed(2)} USD\``,    inline: true  },
-      { name: "💰  New Balance",  value: `\`${newBalance.toFixed(2)} USD\``,  inline: true  },
+      { name: "➕  Amount Added", value: `\`+${amount.toFixed(2)} USD\``,             inline: true  },
+      { name: "💰  New Balance",  value: `\`${newBalance.toFixed(2)} USD\``,           inline: true  },
       { name: "🎯  Target User",  value: `<@${targetUser.id}> (\`${targetUser.id}\`)`, inline: false }
     )
     .setColor(ADMIN_COLOR)
@@ -750,7 +791,7 @@ function buildTierButtons(productId) {
   const buttons = product.tiers.map(tier =>
     new ButtonBuilder()
       .setCustomId(`buy_${productId}_${tier.days}`)
-      .setLabel(`${tier.days} Day${tier.days > 1 ? 's' : ''} - $${tier.price}`)
+      .setLabel(`${tier.days} Day${tier.days > 1 ? "s" : ""} - $${tier.price}`)
       .setStyle(ButtonStyle.Success)
       .setEmoji("💳")
   );
@@ -768,34 +809,45 @@ function buildAmountRow() {
   );
 }
 
-function buildKeyListButtons(page, totalPages, productId) {
+/**
+ * Builds pagination + delete button row for /keylist.
+ * storageId is the resolved storage id (e.g. "auto_joiner_1").
+ */
+function buildKeyListButtons(page, totalPages, storageId) {
   const buttons = [];
-  
+
   if (page > 1) {
     buttons.push(
       new ButtonBuilder()
-        .setCustomId(`keylist_${productId}_${page - 1}`)
+        .setCustomId(`keylist_${storageId}_${page - 1}`)
         .setLabel("◀️ Previous")
         .setStyle(ButtonStyle.Secondary)
     );
   }
-  
+
   buttons.push(
     new ButtonBuilder()
-      .setCustomId(`keylist_refresh_${productId}_${page}`)
+      .setCustomId(`keylist_refresh_${storageId}_${page}`)
       .setLabel("🔄 Refresh")
       .setStyle(ButtonStyle.Primary)
   );
-  
+
+  buttons.push(
+    new ButtonBuilder()
+      .setCustomId(`keylist_delete_${storageId}_${page}`)
+      .setLabel("🗑️ Delete Key")
+      .setStyle(ButtonStyle.Danger)
+  );
+
   if (page < totalPages) {
     buttons.push(
       new ButtonBuilder()
-        .setCustomId(`keylist_${productId}_${page + 1}`)
+        .setCustomId(`keylist_${storageId}_${page + 1}`)
         .setLabel("Next ▶️")
         .setStyle(ButtonStyle.Secondary)
     );
   }
-  
+
   return new ActionRowBuilder().addComponents(...buttons);
 }
 
@@ -864,13 +916,33 @@ client.on("interactionCreate", async (interaction) => {
               .setTitle("⛔  Access Denied")
               .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
               .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
           ]
         });
       }
 
-      const productId = interaction.options.getString("product");
-      const keysText = interaction.options.getString("keys");
-      const file = interaction.options.getAttachment("file");
+      const productId  = interaction.options.getString("product");
+      const tierDays   = interaction.options.getInteger("tier");
+      const keysText   = interaction.options.getString("keys");
+      const file       = interaction.options.getAttachment("file");
+
+      // Auto Joiner requires a tier selection
+      if (productId === "auto_joiner" && !tierDays) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Tier Required")
+              .setDescription(
+                "**Auto Joiner** has separate key pools per duration.\n" +
+                "Please specify the `tier` option: **1 Day**, **2 Days**, or **3 Days**."
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const storageId = resolveStorageId(productId, tierDays);
 
       let keys = [];
 
@@ -878,7 +950,7 @@ client.on("interactionCreate", async (interaction) => {
         keys = keysText.split(/[\s\n]+/).filter(k => k.trim().length > 0);
       } else if (file) {
         try {
-          const response = await axios.get(file.url);
+          const response  = await axios.get(file.url);
           const fileContent = response.data;
           keys = fileContent.split(/[\s\n]+/).filter(k => k.trim().length > 0);
         } catch (err) {
@@ -888,6 +960,7 @@ client.on("interactionCreate", async (interaction) => {
                 .setTitle("❌  File Error")
                 .setDescription("Could not read the file. Make sure it's a text file.")
                 .setColor(ERROR_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
             ]
           });
         }
@@ -898,6 +971,7 @@ client.on("interactionCreate", async (interaction) => {
               .setTitle("❌  Invalid Input")
               .setDescription("Please provide either keys as text or upload a file.")
               .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
           ]
         });
       }
@@ -909,11 +983,12 @@ client.on("interactionCreate", async (interaction) => {
               .setTitle("❌  No Keys Found")
               .setDescription("No valid keys were found in your input.")
               .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
           ]
         });
       }
 
-      const success = await addKeys(productId, keys);
+      const success = await addKeys(storageId, keys);
 
       if (!success) {
         return interaction.editReply({
@@ -922,21 +997,23 @@ client.on("interactionCreate", async (interaction) => {
               .setTitle("❌  Database Error")
               .setDescription("Failed to add keys. Check server logs.")
               .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
           ]
         });
       }
 
-      const product = PRODUCTS[productId];
-      const newStock = await getAvailableKeyCount(productId);
+      const product  = PRODUCTS[productId];
+      const newStock = await getAvailableKeyCount(storageId);
+      const tierLabel = tierDays ? ` (${tierDays} Day${tierDays > 1 ? "s" : ""})` : "";
 
       return interaction.editReply({
         embeds: [
           new EmbedBuilder()
             .setTitle("✅  Keys Added Successfully")
-            .setDescription(`Added **${keys.length}** keys to **${product.name}**`)
+            .setDescription(`Added **${keys.length}** keys to **${product.name}${tierLabel}**`)
             .addFields(
               { name: "📦 New Stock", value: `\`${newStock}\` keys available`, inline: true },
-              { name: "➕ Added By", value: `<@${interaction.user.id}>`, inline: true }
+              { name: "➕ Added By",  value: `<@${interaction.user.id}>`,       inline: true }
             )
             .setColor(SUCCESS_COLOR)
             .setFooter({ text: FOOTER_TEXT })
@@ -949,64 +1026,43 @@ client.on("interactionCreate", async (interaction) => {
     if (commandName === "keylist") {
       await interaction.deferReply({ ephemeral: true });
 
-      const tier = await getAccessTier(interaction.user.id);
-      if (!tier) {
+      const accessTier = await getAccessTier(interaction.user.id);
+      if (!accessTier) {
         return interaction.editReply({
           embeds: [
             new EmbedBuilder()
               .setTitle("⛔  Access Denied")
               .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
               .setColor(ERROR_COLOR)
-          ]
-        });
-      }
-
-      const productId = interaction.options.getString("product");
-      const page = interaction.options.getInteger("page") || 1;
-      const perPage = 10;
-
-      const { keys, total } = await getProductKeys(productId, page, perPage);
-      const totalPages = Math.ceil(total / perPage) || 1;
-
-      const product = PRODUCTS[productId];
-      
-      if (keys.length === 0) {
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle(`📋  ${product.name} Keys`)
-              .setDescription("No keys found for this product.")
-              .setColor(NEUTRAL_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ]
         });
       }
 
-      const keyList = keys.map((key, idx) => {
-        const num = (page - 1) * perPage + idx + 1;
-        const status = key.is_used ? "❌ Used" : "✅ Available";
-        const keyPreview = key.key_value.substring(0, 20) + "...";
-        return `**${num}.** \`${keyPreview}\` — ${status}`;
-      }).join("\n");
+      const productId = interaction.options.getString("product");
+      const tierDays  = interaction.options.getInteger("tier");
+      const page      = interaction.options.getInteger("page") || 1;
+      const perPage   = 10;
 
-      const embed = new EmbedBuilder()
-        .setTitle(`📋  ${product.name} Keys`)
-        .setDescription(keyList)
-        .addFields(
-          { name: "📊 Total Keys", value: `\`${total}\``, inline: true },
-          { name: "📄 Page", value: `\`${page} / ${totalPages}\``, inline: true },
-          { name: "✅ Available", value: `\`${keys.filter(k => !k.is_used).length}\``, inline: true }
-        )
-        .setColor(BRAND_COLOR)
-        .setFooter({ text: `Use buttons to navigate • ${FOOTER_TEXT}` })
-        .setTimestamp();
+      // Auto Joiner requires a tier selection
+      if (productId === "auto_joiner" && !tierDays) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Tier Required")
+              .setDescription(
+                "**Auto Joiner** has separate key pools per duration.\n" +
+                "Please specify the `tier` option: **1 Day**, **2 Days**, or **3 Days**."
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
 
-      const row = buildKeyListButtons(page, totalPages, productId);
+      const storageId = resolveStorageId(productId, tierDays);
 
-      return interaction.editReply({
-        embeds: [embed],
-        components: row ? [row] : []
-      });
+      return sendKeyListEmbed(interaction, storageId, productId, tierDays, page, perPage);
     }
 
     // /viewadmins
@@ -1018,6 +1074,7 @@ client.on("interactionCreate", async (interaction) => {
               .setTitle("⛔  Access Denied")
               .setDescription("This debug command is restricted to the **bot owner** only.")
               .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
           ],
           ephemeral: true
         });
@@ -1081,13 +1138,13 @@ client.on("interactionCreate", async (interaction) => {
         )
         .addFields(
           {
-            name: `🔑  ${ROLE_ACCESS} (${basicUsers.length})`,
-            value: formatList(basicUsers),
+            name:   `🔑  ${ROLE_ACCESS} (${basicUsers.length})`,
+            value:  formatList(basicUsers),
             inline: false
           },
           {
-            name: `👑  ${ROLE_ACCESS_PLUS} (${plusUsers.length})`,
-            value: formatList(plusUsers),
+            name:   `👑  ${ROLE_ACCESS_PLUS} (${plusUsers.length})`,
+            value:  formatList(plusUsers),
             inline: false
           }
         )
@@ -1102,9 +1159,9 @@ client.on("interactionCreate", async (interaction) => {
     if (commandName === "forceadd") {
       await interaction.deferReply({ ephemeral: true });
 
-      const tier = await getAccessTier(interaction.user.id);
+      const accessTierLevel = await getAccessTier(interaction.user.id);
 
-      if (!tier) {
+      if (!accessTierLevel) {
         return interaction.editReply({
           embeds: [
             new EmbedBuilder()
@@ -1128,6 +1185,7 @@ client.on("interactionCreate", async (interaction) => {
               .setTitle("❌  Invalid Target")
               .setDescription("You cannot add balance to a bot account.")
               .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
           ]
         });
       }
@@ -1142,6 +1200,7 @@ client.on("interactionCreate", async (interaction) => {
               .setTitle("❌  Database Error")
               .setDescription("Failed to update balance. Check server logs.")
               .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
           ]
         });
       }
@@ -1204,17 +1263,15 @@ client.on("interactionCreate", async (interaction) => {
 
     // ── Buy product buttons ──
     // customId format: buy_<productId>_<days>
-    // e.g. buy_auto_joiner_1  →  productId="auto_joiner", days=1
     if (interaction.customId.startsWith("buy_")) {
       console.log(`🛒 Purchase initiated by ${interaction.user.tag}: ${interaction.customId}`);
       await interaction.deferReply({ ephemeral: true });
 
       try {
-        // Correctly parse productId even if it contains underscores
-        const withoutPrefix  = interaction.customId.slice("buy_".length); // "auto_joiner_1"
+        const withoutPrefix  = interaction.customId.slice("buy_".length);
         const lastUnderscore = withoutPrefix.lastIndexOf("_");
-        const productId      = withoutPrefix.substring(0, lastUnderscore); // "auto_joiner"
-        const days           = parseInt(withoutPrefix.substring(lastUnderscore + 1)); // 1
+        const productId      = withoutPrefix.substring(0, lastUnderscore);
+        const days           = parseInt(withoutPrefix.substring(lastUnderscore + 1));
 
         console.log(`📦 Parsed → productId: "${productId}", days: ${days}`);
 
@@ -1227,6 +1284,7 @@ client.on("interactionCreate", async (interaction) => {
                 .setTitle("❌  Product Not Found")
                 .setDescription(`Unknown product: \`${productId}\``)
                 .setColor(ERROR_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
             ]
           });
         }
@@ -1240,6 +1298,7 @@ client.on("interactionCreate", async (interaction) => {
                 .setTitle("❌  Tier Not Found")
                 .setDescription(`No tier found for \`${days}\` day(s) in **${product.name}**.`)
                 .setColor(ERROR_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
             ]
           });
         }
@@ -1263,14 +1322,18 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
-        const key = await getRandomAvailableKey(productId);
+        // Use tier-specific storage id for Auto Joiner
+        const storageId = resolveStorageId(productId, days);
+        const key = await getRandomAvailableKey(storageId);
 
         if (!key) {
           return interaction.editReply({
             embeds: [
               new EmbedBuilder()
                 .setTitle("📦  Out of Stock")
-                .setDescription(`**${product.name}** is currently out of stock. Please check back later.`)
+                .setDescription(
+                  `**${product.name}** (${days} day${days > 1 ? "s" : ""}) is currently out of stock. Please check back later.`
+                )
                 .setColor(WARNING_COLOR)
                 .setFooter({ text: FOOTER_TEXT })
             ]
@@ -1285,6 +1348,7 @@ client.on("interactionCreate", async (interaction) => {
                 .setTitle("❌  Payment Failed")
                 .setDescription("Could not process payment. Please try again.")
                 .setColor(ERROR_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
             ]
           });
         }
@@ -1292,7 +1356,7 @@ client.on("interactionCreate", async (interaction) => {
         await markKeyAsUsed(key.id, interaction.user.id);
 
         const newBalance = await getBalance(interaction.user.id);
-        const stock      = await getAvailableKeyCount(productId);
+        const stock      = await getAvailableKeyCount(storageId);
 
         console.log(`✅ Purchase successful! New balance: ${newBalance}, Remaining stock: ${stock}`);
 
@@ -1300,11 +1364,11 @@ client.on("interactionCreate", async (interaction) => {
           embeds: [
             new EmbedBuilder()
               .setTitle("✅  Purchase Successful!")
-              .setDescription(`You've purchased **${product.name}** — ${tier.days} day${tier.days > 1 ? 's' : ''}`)
+              .setDescription(`You've purchased **${product.name}** — ${tier.days} day${tier.days > 1 ? "s" : ""}`)
               .addFields(
-                { name: "💵 Price",           value: `\`$${tier.price}\``,            inline: true },
-                { name: "💰 New Balance",      value: `\`$${newBalance.toFixed(2)}\``, inline: true },
-                { name: "📦 Remaining Stock",  value: `\`${stock} keys\``,             inline: true }
+                { name: "💵 Price",          value: `\`$${tier.price}\``,            inline: true },
+                { name: "💰 New Balance",     value: `\`$${newBalance.toFixed(2)}\``, inline: true },
+                { name: "📦 Remaining Stock", value: `\`${stock} keys\``,             inline: true }
               )
               .setColor(SUCCESS_COLOR)
               .setFooter({ text: "Your key has been sent to your DMs • " + FOOTER_TEXT })
@@ -1317,10 +1381,10 @@ client.on("interactionCreate", async (interaction) => {
             embeds: [
               new EmbedBuilder()
                 .setTitle(`🔑  ${product.name} Key`)
-                .setDescription(`Your **${tier.days} day${tier.days > 1 ? 's' : ''}** license key:`)
+                .setDescription(`Your **${tier.days} day${tier.days > 1 ? "s" : ""}** license key:`)
                 .addFields(
                   { name: "🔐 License Key", value: `\`\`\`\n${key.key_value}\n\`\`\``, inline: false },
-                  { name: "⏱️ Duration",    value: `\`${tier.days} day${tier.days > 1 ? 's' : ''}\``, inline: true },
+                  { name: "⏱️ Duration",    value: `\`${tier.days} day${tier.days > 1 ? "s" : ""}\``, inline: true },
                   { name: "💵 Price",       value: `\`$${tier.price}\``,                               inline: true }
                 )
                 .setColor(SUCCESS_COLOR)
@@ -1341,6 +1405,7 @@ client.on("interactionCreate", async (interaction) => {
               .setTitle("❌  Unexpected Error")
               .setDescription(`\`\`\`\n${err.message}\n\`\`\`\nPlease contact support.`)
               .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
           ]
         }).catch(() => {});
       }
@@ -1348,48 +1413,55 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // Key list pagination
+    // ── Key list: delete button ──
+    // customId: keylist_delete_<storageId>_<page>
+    if (interaction.customId.startsWith("keylist_delete_")) {
+      const withoutPrefix  = interaction.customId.slice("keylist_delete_".length); // "<storageId>_<page>"
+      const lastUnderscore = withoutPrefix.lastIndexOf("_");
+      const storageId      = withoutPrefix.substring(0, lastUnderscore);
+      const page           = withoutPrefix.substring(lastUnderscore + 1);
+
+      const modal = new ModalBuilder()
+        .setCustomId(`modal_delete_key_${storageId}_${page}`)
+        .setTitle("🗑️ Delete Key by Number");
+
+      const input = new TextInputBuilder()
+        .setCustomId("delete_key_number")
+        .setLabel("Key number to delete (from the list above)")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("e.g. 3")
+        .setRequired(true);
+
+      modal.addComponents(new ActionRowBuilder().addComponents(input));
+      return interaction.showModal(modal);
+    }
+
+    // ── Key list: pagination / refresh ──
     if (interaction.customId.startsWith("keylist_")) {
       await interaction.deferUpdate();
 
-      const parts     = interaction.customId.split("_");
-      const isRefresh = parts[1] === "refresh";
-      const productId = isRefresh ? parts[2] : parts[1];
-      const page      = parseInt(isRefresh ? parts[3] : parts[2]);
-      const perPage   = 10;
+      const withoutPrefix = interaction.customId.slice("keylist_".length);
+      const isRefresh     = withoutPrefix.startsWith("refresh_");
 
-      const { keys, total } = await getProductKeys(productId, page, perPage);
-      const totalPages = Math.ceil(total / perPage) || 1;
+      let rest;
+      if (isRefresh) {
+        rest = withoutPrefix.slice("refresh_".length); // "<storageId>_<page>"
+      } else {
+        rest = withoutPrefix; // "<storageId>_<page>"
+      }
 
-      const product = PRODUCTS[productId];
+      const lastUnderscore = rest.lastIndexOf("_");
+      const storageId      = rest.substring(0, lastUnderscore);
+      const page           = parseInt(rest.substring(lastUnderscore + 1));
+      const perPage        = 10;
 
-      const keyList = keys.map((key, idx) => {
-        const num        = (page - 1) * perPage + idx + 1;
-        const status     = key.is_used ? "❌ Used" : "✅ Available";
-        const keyPreview = key.key_value.substring(0, 20) + "...";
-        return `**${num}.** \`${keyPreview}\` — ${status}`;
-      }).join("\n");
+      // Reconstruct productId and tierDays from storageId
+      const { productId, tierDays } = parseStorageId(storageId);
 
-      const embed = new EmbedBuilder()
-        .setTitle(`📋  ${product.name} Keys`)
-        .setDescription(keyList || "No keys found.")
-        .addFields(
-          { name: "📊 Total Keys", value: `\`${total}\``,             inline: true },
-          { name: "📄 Page",       value: `\`${page} / ${totalPages}\``, inline: true },
-          { name: "✅ Available",  value: `\`${keys.filter(k => !k.is_used).length}\``, inline: true }
-        )
-        .setColor(BRAND_COLOR)
-        .setFooter({ text: `Use buttons to navigate • ${FOOTER_TEXT}` })
-        .setTimestamp();
-
-      const row = buildKeyListButtons(page, totalPages, productId);
-
-      return interaction.editReply({
-        embeds: [embed],
-        components: row ? [row] : []
-      });
+      return sendKeyListEdit(interaction, storageId, productId, tierDays, page, perPage);
     }
 
+    // ── Amount buttons ──
     if (interaction.customId.startsWith("amt_")) {
       const userId  = interaction.user.id;
       const pending = pendingPayments.get(userId);
@@ -1400,6 +1472,7 @@ client.on("interactionCreate", async (interaction) => {
               .setTitle("⚠️  Session Expired")
               .setDescription("Your session has timed out. Please start again with `/pay`.")
               .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
           ],
           ephemeral: true
         });
@@ -1439,7 +1512,9 @@ client.on("interactionCreate", async (interaction) => {
           embeds: [
             new EmbedBuilder()
               .setTitle(`${product.emoji}  ${product.name}`)
-              .setDescription(`${product.description}\n\n🔜 **Coming Soon**\n\nThis product is currently under development.`)
+              .setDescription(
+                `${product.description}\n\n🔜 **Coming Soon**\n\nThis product is currently under development.`
+              )
               .setColor(WARNING_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ],
@@ -1447,17 +1522,22 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      const stock    = await getAvailableKeyCount(productId);
-      const tierInfo = product.tiers.map(t => 
-        `**${t.days} day${t.days > 1 ? 's' : ''}** — ~~$${t.originalPrice}~~ **$${t.price}** 🔥 (Save $${t.originalPrice - t.price})`
-      ).join("\n");
+      // Per-tier stock for shop view
+      const tierInfo = await Promise.all(
+        product.tiers.map(async t => {
+          const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
+          return (
+            `**${t.days} day${t.days > 1 ? "s" : ""}** — ~~$${t.originalPrice}~~ **$${t.price}** 🔥 ` +
+            `(Save $${t.originalPrice - t.price})  📦 \`${stock}\` in stock`
+          );
+        })
+      );
 
       const embed = new EmbedBuilder()
         .setTitle(`${product.emoji}  ${product.name}`)
         .setDescription(
           `${product.description}\n\n` +
-          `**💰 Pricing (Special Discount!):**\n${tierInfo}\n\n` +
-          `📦 **Stock:** ${stock} keys available`
+          `**💰 Pricing (Special Discount!):**\n${tierInfo.join("\n")}`
         )
         .setColor(BRAND_COLOR)
         .setFooter({ text: "Select a tier below to purchase • " + FOOTER_TEXT })
@@ -1466,7 +1546,7 @@ client.on("interactionCreate", async (interaction) => {
       const row = buildTierButtons(productId);
 
       return interaction.update({
-        embeds: [embed],
+        embeds:     [embed],
         components: row ? [row] : []
       });
     }
@@ -1488,41 +1568,202 @@ client.on("interactionCreate", async (interaction) => {
   }
 
   // ──────────── MODAL SUBMITS ────────────
-  if (interaction.isModalSubmit() && interaction.customId === "modal_custom_amount") {
-    const userId  = interaction.user.id;
-    const pending = pendingPayments.get(userId);
-    if (!pending) {
-      return interaction.reply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle("⚠️  Session Expired")
-            .setDescription("Your session timed out. Please use `/pay` to start again.")
-            .setColor(WARNING_COLOR)
-        ],
-        ephemeral: true
-      });
+  if (interaction.isModalSubmit()) {
+
+    // Custom payment amount
+    if (interaction.customId === "modal_custom_amount") {
+      const userId  = interaction.user.id;
+      const pending = pendingPayments.get(userId);
+      if (!pending) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  Session Expired")
+              .setDescription("Your session timed out. Please use `/pay` to start again.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      const amount = parseFloat(interaction.fields.getTextInputValue("custom_amount_input"));
+
+      if (isNaN(amount) || amount < 1 || amount > 1000) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Invalid Amount")
+              .setDescription("Please enter a valid amount **between $1 and $1000**.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      pending.amount = amount;
+      pendingPayments.set(userId, pending);
+      await interaction.deferReply({ ephemeral: true });
+      await processPayment(interaction, userId, amount, pending.currency);
+      return;
     }
 
-    const amount = parseFloat(interaction.fields.getTextInputValue("custom_amount_input"));
+    // Delete key by number
+    // customId: modal_delete_key_<storageId>_<page>
+    if (interaction.customId.startsWith("modal_delete_key_")) {
+      await interaction.deferReply({ ephemeral: true });
 
-    if (isNaN(amount) || amount < 1 || amount > 1000) {
-      return interaction.reply({
+      const withoutPrefix  = interaction.customId.slice("modal_delete_key_".length);
+      const lastUnderscore = withoutPrefix.lastIndexOf("_");
+      const storageId      = withoutPrefix.substring(0, lastUnderscore);
+      const page           = parseInt(withoutPrefix.substring(lastUnderscore + 1));
+      const perPage        = 10;
+
+      const keyNumberRaw = interaction.fields.getTextInputValue("delete_key_number");
+      const keyNumber    = parseInt(keyNumberRaw.trim());
+
+      if (isNaN(keyNumber) || keyNumber < 1) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Invalid Number")
+              .setDescription("Please enter a valid key number from the list.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      // Fetch all available keys to find by global index
+      // The key number shown is (page-1)*perPage + local_index + 1
+      // So find which page / offset the key is on
+      const globalOffset = keyNumber - 1; // 0-based
+      const targetPage   = Math.floor(globalOffset / perPage) + 1;
+      const localIndex   = globalOffset % perPage;
+
+      const { keys, total } = await getAvailableProductKeys(storageId, targetPage, perPage);
+
+      if (localIndex >= keys.length) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Key Not Found")
+              .setDescription(`No available key #${keyNumber} exists. Total available: **${total}**.`)
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const keyRecord = keys[localIndex];
+      const success   = await deleteKey(keyRecord.id);
+
+      if (!success) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Delete Failed")
+              .setDescription("Could not delete the key. Check server logs.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const { productId, tierDays } = parseStorageId(storageId);
+      const product                 = PRODUCTS[productId];
+      const tierLabel               = tierDays ? ` (${tierDays} Day${tierDays > 1 ? "s" : ""})` : "";
+      const newStock                = await getAvailableKeyCount(storageId);
+
+      await interaction.editReply({
         embeds: [
           new EmbedBuilder()
-            .setTitle("❌  Invalid Amount")
-            .setDescription("Please enter a valid amount **between $1 and $1000**.")
+            .setTitle("🗑️  Key Deleted")
+            .setDescription(`Key **#${keyNumber}** has been permanently removed from **${product.name}${tierLabel}**.`)
+            .addFields(
+              { name: "🔑 Deleted Key",  value: `\`${keyRecord.key_value.substring(0, 30)}...\``, inline: false },
+              { name: "📦 Remaining Stock", value: `\`${newStock}\` keys available`,               inline: true },
+              { name: "🛠️ Deleted By",   value: `<@${interaction.user.id}>`,                      inline: true }
+            )
             .setColor(ERROR_COLOR)
-        ],
-        ephemeral: true
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ]
       });
-    }
 
-    pending.amount = amount;
-    pendingPayments.set(userId, pending);
-    await interaction.deferReply({ ephemeral: true });
-    await processPayment(interaction, userId, amount, pending.currency);
+      return;
+    }
   }
 });
+
+// ===== PARSE STORAGE ID =====
+/**
+ * Reverse of resolveStorageId.
+ * "auto_joiner_1" → { productId: "auto_joiner", tierDays: 1 }
+ * "notifier"      → { productId: "notifier",    tierDays: null }
+ */
+function parseStorageId(storageId) {
+  const match = storageId.match(/^(.+?)_(\d+)$/);
+  if (match && PRODUCTS[match[1]]) {
+    return { productId: match[1], tierDays: parseInt(match[2]) };
+  }
+  return { productId: storageId, tierDays: null };
+}
+
+// ===== KEY LIST HELPERS =====
+async function buildKeyListEmbedAndRow(storageId, productId, tierDays, page, perPage) {
+  const { keys, total } = await getAvailableProductKeys(storageId, page, perPage);
+  const totalPages      = Math.ceil(total / perPage) || 1;
+
+  const product   = PRODUCTS[productId];
+  const tierLabel = tierDays ? ` — ${tierDays} Day${tierDays > 1 ? "s" : ""}` : "";
+
+  if (keys.length === 0) {
+    const embed = new EmbedBuilder()
+      .setTitle(`📋  ${product.name}${tierLabel} — Available Keys`)
+      .setDescription("No available keys found for this product/tier.")
+      .setColor(NEUTRAL_COLOR)
+      .setFooter({ text: FOOTER_TEXT });
+    return { embed, row: null, totalPages };
+  }
+
+  const keyList = keys.map((key, idx) => {
+    const num        = (page - 1) * perPage + idx + 1;
+    const keyPreview = key.key_value.substring(0, 24) + "...";
+    return `**${num}.** \`${keyPreview}\``;
+  }).join("\n");
+
+  const embed = new EmbedBuilder()
+    .setTitle(`📋  ${product.name}${tierLabel} — Available Keys`)
+    .setDescription(keyList)
+    .addFields(
+      { name: "📦 Total Available", value: `\`${total}\``,               inline: true },
+      { name: "📄 Page",           value: `\`${page} / ${totalPages}\``, inline: true }
+    )
+    .setColor(BRAND_COLOR)
+    .setFooter({ text: `Use 🗑️ Delete Key to remove a key by its number • ${FOOTER_TEXT}` })
+    .setTimestamp();
+
+  const row = buildKeyListButtons(page, totalPages, storageId);
+  return { embed, row, totalPages };
+}
+
+async function sendKeyListEmbed(interaction, storageId, productId, tierDays, page, perPage) {
+  const { embed, row } = await buildKeyListEmbedAndRow(storageId, productId, tierDays, page, perPage);
+  return interaction.editReply({
+    embeds:     [embed],
+    components: row ? [row] : []
+  });
+}
+
+async function sendKeyListEdit(interaction, storageId, productId, tierDays, page, perPage) {
+  const { embed, row } = await buildKeyListEmbedAndRow(storageId, productId, tierDays, page, perPage);
+  return interaction.editReply({
+    embeds:     [embed],
+    components: row ? [row] : []
+  });
+}
 
 // ===== LEGACY TEXT COMMAND /test (owner debug only) =====
 client.on("messageCreate", async (message) => {
@@ -1547,7 +1788,8 @@ client.on("messageCreate", async (message) => {
       .addFields(
         { name: "Added",       value: `\`+${amount} USD\``,              inline: true },
         { name: "New Balance", value: `\`${newBalance.toFixed(2)} USD\``, inline: true }
-      );
+      )
+      .setFooter({ text: FOOTER_TEXT });
 
     if (!success) embed.setDescription("❌ DB write error — check server logs.");
     return message.reply({ embeds: [embed] });
@@ -1586,6 +1828,7 @@ async function processPayment(interaction, userId, amount, currency) {
           .setTitle("❌  Payment Failed")
           .setDescription("Could not create payment. Please try again later.")
           .setColor(ERROR_COLOR)
+          .setFooter({ text: FOOTER_TEXT })
       ],
       components: []
     });
