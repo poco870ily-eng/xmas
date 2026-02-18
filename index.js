@@ -29,18 +29,15 @@ const PORT                = process.env.PORT || 3000;
 const SUPABASE_URL        = process.env.SUPABASE_URL;
 const SUPABASE_KEY        = process.env.SUPABASE_KEY;
 const OWNER_ID            = process.env.OWNER_ID;
+const GUILD_ID            = process.env.GUILD_ID; // ID твоего Discord сервера для быстрой регистрации команд
 
 // ===== ROLE NAMES =====
-// ВАЖНО: Эти строки должны совпадать с названиями ролей в Discord СИМВОЛ В СИМВОЛ
-// Если не работает — используй ROLE_IDS ниже вместо имён
 const ROLE_ACCESS      = "Pay Access";
 const ROLE_ACCESS_PLUS = "Pay Access+";
 
 // ===== (ОПЦИОНАЛЬНО) ROLE IDs =====
-// Если проблемы с именами — укажи ID ролей и переключи USE_ROLE_IDS на true
-// ID можно получить: Discord → ПКМ на роль → "Копировать ID" (нужен Developer Mode)
-const USE_ROLE_IDS     = false;
-const ROLE_ID_ACCESS   = process.env.ROLE_ID_ACCESS   || "";   // напр. "123456789012345678"
+const USE_ROLE_IDS        = false;
+const ROLE_ID_ACCESS      = process.env.ROLE_ID_ACCESS || "";
 const ROLE_ID_ACCESS_PLUS = process.env.ROLE_ID_ACCESS_PLUS || "";
 
 // ===== SUPABASE =====
@@ -74,12 +71,15 @@ const SLASH_COMMANDS = [
   {
     name: "viewadmins",
     description: "🔍 [Owner] Debug — list all users with Pay Access / Pay Access+ roles",
-    default_member_permissions: "0"
+    dm_permission: false,
+    default_member_permissions: "0" // Только владелец сервера
   },
   {
     name: "forceadd",
     description: "🔧 [Pay Access] Manually add balance to a user",
-    dm_permission: false, // ← Команда работает ТОЛЬКО на серверах, не в DM
+    dm_permission: false, // Только на сервере, не в DM
+    // Убрали default_member_permissions — команда видна ВСЕМ
+    // Проверка прав происходит в коде
     options: [
       {
         name: "user",
@@ -103,19 +103,24 @@ const SLASH_COMMANDS = [
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
-  const GUILD_ID = process.env.GUILD_ID;
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
 
   try {
     console.log("🔄 Registering slash commands...");
+    
     if (GUILD_ID) {
+      // Регистрация для конкретного сервера (мгновенно)
       await rest.put(
         Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
         { body: SLASH_COMMANDS }
       );
       console.log(`✅ Slash commands registered for guild ${GUILD_ID}!`);
     } else {
-      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: SLASH_COMMANDS });
+      // Глобальная регистрация (может занять до 1 часа)
+      await rest.put(
+        Routes.applicationCommands(CLIENT_ID), 
+        { body: SLASH_COMMANDS }
+      );
       console.log("✅ Slash commands registered globally!");
     }
   } catch (err) {
@@ -130,17 +135,10 @@ client.once("ready", async () => {
 
 // ===== ROLE HELPERS =====
 
-/**
- * Нормализует строку для сравнения: убирает пробелы по краям, приводит к нижнему регистру.
- * Это защищает от невидимых символов и опечаток в названиях ролей.
- */
 function normalizeRoleName(name) {
   return name.trim().toLowerCase();
 }
 
-/**
- * Проверяет наличие роли у участника — по ID (надёжнее) или по имени.
- */
 function memberHasRole(member, roleName, roleId = "") {
   if (USE_ROLE_IDS && roleId) {
     return member.roles.cache.has(roleId);
@@ -149,24 +147,15 @@ function memberHasRole(member, roleName, roleId = "") {
   return member.roles.cache.some(r => normalizeRoleName(r.name) === target);
 }
 
-/**
- * Возвращает уровень доступа пользователя по всем гильдиям бота.
- * 
- * КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ:
- * Используем guild.members.fetch(userId) с force: true чтобы получить
- * свежие данные напрямую из API Discord, игнорируя возможно пустой кэш.
- */
 async function getAccessTier(userId) {
   if (userId === OWNER_ID) return "plus";
 
   for (const [, guild] of client.guilds.cache) {
     let member;
     try {
-      // force: true — обходит кэш, всегда идёт в API Discord
-      // Это главное исправление — без него роли могут не подгрузиться
       member = await guild.members.fetch({ user: userId, force: true });
     } catch {
-      continue; // пользователь не в этой гильдии
+      continue;
     }
 
     console.log(
@@ -181,20 +170,12 @@ async function getAccessTier(userId) {
   return null;
 }
 
-/**
- * Возвращает всех пользователей с ролью Pay Access+ по всем гильдиям.
- *
- * КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ:
- * Сначала принудительно загружаем всех участников гильдии (force: true),
- * затем ищем роль и перебираем её members.
- */
 async function getAccessPlusUsers() {
   const seen  = new Set();
   const users = [];
 
   for (const [, guild] of client.guilds.cache) {
     try {
-      // Загружаем ВСЕХ участников гильдии свежими данными из API
       await guild.members.fetch({ force: true });
     } catch (e) {
       console.error(`❌ Could not fetch members for guild "${guild.name}":`, e.message);
@@ -548,7 +529,6 @@ client.on("interactionCreate", async (interaction) => {
 
       for (const [, guild] of client.guilds.cache) {
         try {
-          // force: true — гарантирует свежий кэш из API
           await guild.members.fetch({ force: true });
         } catch (e) {
           console.error(`❌ Could not fetch members for guild "${guild.name}":`, e.message);
@@ -569,7 +549,6 @@ client.on("interactionCreate", async (interaction) => {
           );
         }
 
-        // Выводим все роли гильдии чтобы было видно точные названия
         console.log(
           `[DEBUG /viewadmins] Guild: "${guild.name}" | All roles:`,
           guild.roles.cache.map(r => `"${r.name}" (${r.id})`).join(", ")
@@ -627,7 +606,6 @@ client.on("interactionCreate", async (interaction) => {
 
     // /forceadd — requires Pay Access or Pay Access+
     if (commandName === "forceadd") {
-      // Defer сразу — getAccessTier делает сетевой запрос
       await interaction.deferReply({ ephemeral: true });
 
       const tier = await getAccessTier(interaction.user.id);
