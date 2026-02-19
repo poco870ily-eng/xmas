@@ -275,17 +275,22 @@ process.on("unhandledRejection", (err) => {
   console.error("❌ Unhandled rejection:", err?.message || err);
 });
 
-// ===== HELPER: регистрация команд для одного сервера =====
-async function registerCommandsForGuild(guildId) {
+// ===== REGISTER COMMANDS GLOBALLY (один раз — работает на всех серверах) =====
+async function registerGlobalCommands() {
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
   try {
-    await rest.put(
-      Routes.applicationGuildCommands(CLIENT_ID, guildId),
-      { body: SLASH_COMMANDS }
-    );
-    console.log(`✅ Команды зарегистрированы для сервера ${guildId}`);
+    // Очищаем guild-команды на всех серверах, чтобы убрать дубли
+    for (const [guildId] of client.guilds.cache) {
+      try {
+        await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guildId), { body: [] });
+        console.log(`🧹 Очищены guild-команды для сервера ${guildId}`);
+      } catch { /* игнорируем */ }
+    }
+    // Регистрируем глобально — Discord автоматически раздаёт на все серверы
+    await rest.put(Routes.applicationCommands(CLIENT_ID), { body: SLASH_COMMANDS });
+    console.log("✅ Slash-команды зарегистрированы глобально");
   } catch (err) {
-    console.warn(`⚠️ Не удалось зарегистрировать команды для ${guildId}: ${err.message}`);
+    console.error("❌ Ошибка регистрации команд:", err.message);
   }
 }
 
@@ -294,9 +299,7 @@ client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
   console.log(`📡 Бот находится на ${client.guilds.cache.size} сервере(ах)`);
 
-  // Регистрируем команды для каждого сервера, где уже есть бот
-  const guildIds = [...client.guilds.cache.keys()];
-  await Promise.all(guildIds.map(id => registerCommandsForGuild(id)));
+  await registerGlobalCommands();
 
   client.user.setPresence({
     activities: [{ name: "💳 /pay  |  /buy  |  /balance", type: 0 }],
@@ -308,10 +311,9 @@ client.once("ready", async () => {
   checkExpiredSubscriptions();
 });
 
-// ===== REGISTER COMMANDS WHEN JOINING A NEW GUILD =====
-client.on("guildCreate", async (guild) => {
+// Новые серверы получают глобальные команды автоматически
+client.on("guildCreate", (guild) => {
   console.log(`➕ Бот добавлен на новый сервер: "${guild.name}" (${guild.id})`);
-  await registerCommandsForGuild(guild.id);
 });
 
 // ===== ROLE HELPERS =====
