@@ -526,7 +526,7 @@ const PRODUCTS = {
     id:          "auto_joiner",
     name:        "Auto Joiner",
     emoji:       "🤖",
-    description: "Automatically join Discord servers",
+    description: "Automatically join rich servers",
     tiers: [
       { days: 1, price: 30, originalPrice: 60 },
       { days: 2, price: 50, originalPrice: 80 },
@@ -537,7 +537,7 @@ const PRODUCTS = {
     id:          "notifier",
     name:        "Notifier",
     emoji:       "🔔",
-    description: "Get instant notifications",
+    description: "Get brainrot logs",
     comingSoon:  true
   }
 };
@@ -550,6 +550,12 @@ const CURRENCIES = {
   USDT: { emoji: "₮", name: "Tether (TRC20)", color: 0x26A17B },
   SOL:  { emoji: "◎", name: "Solana",         color: 0x9945FF }
 };
+
+// ===== FUNPAY RESELLERS =====
+const FUNPAY_RESELLERS = [
+  { name: "ilyasika", url: "https://funpay.com/lots/offer?id=55896359" },
+  { name: "ver0n",    url: "https://funpay.com/lots/offer?id=55551861" }
+];
 
 // ===== CREATE PAYMENT =====
 async function createPayment(userId, amount, currency) {
@@ -575,6 +581,7 @@ const ERROR_COLOR   = 0xE74C3C;
 const NEUTRAL_COLOR = 0x99AAB5;
 const ADMIN_COLOR   = 0xE67E22;
 const PLUS_COLOR    = 0xA855F7;
+const FUNPAY_COLOR  = 0xFF6B35;
 
 // ✅ Updated footer branding
 const FOOTER_TEXT = "⚡ Nameless Paysystem";
@@ -673,6 +680,29 @@ async function buildShopEmbed() {
   }
 
   return embed;
+}
+
+function buildFunPayEmbed() {
+  const resellersText = FUNPAY_RESELLERS
+    .map((r, i) => `**${i + 1}. ${r.name}**\n🔗 ${r.url}`)
+    .join("\n\n");
+
+  return new EmbedBuilder()
+    .setTitle("🎮  Purchase via FunPay")
+    .setDescription(
+      "**Our Official Resellers:**\n\n" +
+      resellersText + "\n\n" +
+      "**📝 How to Purchase:**\n" +
+      "> 1️⃣ Click on a reseller link above\n" +
+      "> 2️⃣ Select the product you want\n" +
+      "> 3️⃣ Complete the purchase on FunPay\n" +
+      "> 4️⃣ Receive your key from the reseller\n\n" +
+      "⚠️ **Note:** Purchases through FunPay are handled by the resellers. " +
+      "Contact them directly for support."
+    )
+    .setColor(FUNPAY_COLOR)
+    .setFooter({ text: FOOTER_TEXT })
+    .setTimestamp();
 }
 
 function buildPaymentEmbed(payment, currency, status = "waiting") {
@@ -777,6 +807,28 @@ const STATUS_CONFIG = {
 };
 
 // ===== UI BUILDERS =====
+function buildPaymentMethodMenu() {
+  const options = [
+    new StringSelectMenuOptionBuilder()
+      .setLabel("💰 Pay with Balance")
+      .setDescription("Use your account balance")
+      .setValue("balance")
+      .setEmoji("💳"),
+    new StringSelectMenuOptionBuilder()
+      .setLabel("🎮 Pay via FunPay")
+      .setDescription("Purchase from our resellers")
+      .setValue("funpay")
+      .setEmoji("🛒")
+  ];
+
+  return new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId("select_payment_method")
+      .setPlaceholder("💳  Choose payment method...")
+      .addOptions(options)
+  );
+}
+
 function buildCurrencyMenu(customId = "select_currency") {
   const options = Object.entries(CURRENCIES).map(([code, info]) =>
     new StringSelectMenuOptionBuilder()
@@ -908,10 +960,20 @@ client.on("interactionCreate", async (interaction) => {
 
     // /buy
     if (commandName === "buy") {
-      const embed = await buildShopEmbed();
+      const embed = new EmbedBuilder()
+        .setTitle("🛒  Purchase Products")
+        .setDescription(
+          "**Step 1 / 2** — Choose your payment method.\n\n" +
+          "💰 **Balance** — Use your account balance (instant delivery)\n" +
+          "🎮 **FunPay** — Purchase from our trusted resellers"
+        )
+        .setColor(BRAND_COLOR)
+        .setFooter({ text: FOOTER_TEXT })
+        .setTimestamp();
+
       return interaction.reply({
         embeds: [embed],
-        components: [buildProductMenu()],
+        components: [buildPaymentMethodMenu()],
         ephemeral: true
       });
     }
@@ -1279,10 +1341,20 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     if (interaction.customId === "btn_buy") {
-      const embed = await buildShopEmbed();
+      const embed = new EmbedBuilder()
+        .setTitle("🛒  Purchase Products")
+        .setDescription(
+          "**Step 1 / 2** — Choose your payment method.\n\n" +
+          "💰 **Balance** — Use your account balance (instant delivery)\n" +
+          "🎮 **FunPay** — Purchase from our trusted resellers"
+        )
+        .setColor(BRAND_COLOR)
+        .setFooter({ text: FOOTER_TEXT })
+        .setTimestamp();
+
       return interaction.reply({
         embeds: [embed],
-        components: [buildProductMenu()],
+        components: [buildPaymentMethodMenu()],
         ephemeral: true
       });
     }
@@ -1546,6 +1618,34 @@ client.on("interactionCreate", async (interaction) => {
 
   // ──────────── SELECT MENUS ────────────
   if (interaction.isStringSelectMenu()) {
+    if (interaction.customId === "select_payment_method") {
+      const method = interaction.values[0];
+
+      if (method === "funpay") {
+        // Показываем информацию о FunPay реселлерах
+        const backButton = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("btn_buy")
+            .setLabel("◀️ Back to Payment Methods")
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        return interaction.update({
+          embeds: [buildFunPayEmbed()],
+          components: [backButton]
+        });
+      }
+
+      if (method === "balance") {
+        // Показываем обычное меню продуктов
+        const embed = await buildShopEmbed();
+        return interaction.update({
+          embeds: [embed],
+          components: [buildProductMenu()]
+        });
+      }
+    }
+
     if (interaction.customId === "select_product") {
       const productId = interaction.values[0];
       const product   = PRODUCTS[productId];
@@ -1565,13 +1665,12 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Per-tier stock for shop view
+      // Show per-tier stock for shop view
       const tierInfo = await Promise.all(
         product.tiers.map(async t => {
           const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
           return (
-            `**${t.days} day${t.days > 1 ? "s" : ""}** — ~~$${t.originalPrice}~~ **$${t.price}** 🔥 ` +
-            `(Save $${t.originalPrice - t.price})  📦 \`${stock}\` in stock`
+            `**${t.days} day${t.days > 1 ? "s" : ""}** — ~~$${t.originalPrice}~~ **$${t.price}** 🔥  📦 \`${stock}\` in stock`
           );
         })
       );
