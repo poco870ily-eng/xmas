@@ -336,15 +336,17 @@ async function getNotifierAccessRole() {
   const guildId = GUILD_ID;
   if (!guildId) {
     console.warn("⚠️ GUILD_ID not set — cannot manage Access role");
-    return null;
+    return { guild: null, role: null };
   }
 
   let guild;
   try {
     guild = await client.guilds.fetch(guildId);
+    // Ensure members and roles are cached
+    await guild.members.fetch({ force: true });
   } catch (e) {
     console.error("❌ Could not fetch guild:", e.message);
-    return null;
+    return { guild: null, role: null };
   }
 
   const role = guild.roles.cache.find(
@@ -352,7 +354,7 @@ async function getNotifierAccessRole() {
   );
 
   if (!role) {
-    console.warn(`⚠️ Role "${ROLE_NOTIFIER_ACCESS}" not found in guild "${guild.name}"`);
+    console.warn(`⚠️ Role "${ROLE_NOTIFIER_ACCESS}" not found in guild "${guild.name}". Make sure a role named exactly "${ROLE_NOTIFIER_ACCESS}" exists.`);
   }
 
   return { guild, role };
