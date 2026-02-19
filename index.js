@@ -801,11 +801,11 @@ const PRODUCTS = {
 
 // ===== CURRENCY CONFIG =====
 const CURRENCIES = {
-  BTC:  { emoji: "₿", name: "Bitcoin",       color: 0xF7931A },
-  LTC:  { emoji: "Ł", name: "Litecoin",       color: 0xBFBBBB },
-  ETH:  { emoji: "Ξ", name: "Ethereum",       color: 0x627EEA },
-  USDT: { emoji: "₮", name: "Tether (TRC20)", color: 0x26A17B },
-  SOL:  { emoji: "◎", name: "Solana",         color: 0x9945FF }
+  BTC:  { emoji: "₿",  name: "Bitcoin",       color: 0xF7931A },
+  LTC:  { emoji: "Ł",  name: "Litecoin",       color: 0xBFBBBB },
+  USDT: { emoji: "₮",  name: "Tether (TRC20)", color: 0x26A17B },
+  TRX:  { emoji: "🔺", name: "TRON",           color: 0xFF0013 },
+  BNB:  { emoji: "🟡", name: "BNB",            color: 0xF3BA2F }
 };
 
 // ===== FUNPAY RESELLERS =====
