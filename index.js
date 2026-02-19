@@ -35,7 +35,6 @@ const GUILD_ID            = process.env.GUILD_ID;
 // ===== ROLE NAMES =====
 const ROLE_ACCESS      = "Pay Access";
 const ROLE_ACCESS_PLUS = "Pay Access+";
-const ROLE_SCRIPTER    = "Scripter";
 
 // ===== (ОПЦИОНАЛЬНО) ROLE IDs =====
 const USE_ROLE_IDS        = false;
@@ -56,9 +55,8 @@ const client = new Client({
   ]
 });
 
-// ===== PUBLIC SLASH COMMANDS (видны всем, включая Scripter) =====
-// Регистрируются ГЛОБАЛЬНО
-const PUBLIC_COMMANDS = [
+// ===== SLASH COMMANDS =====
+const SLASH_COMMANDS = [
   {
     name: "pay",
     description: "💳 Top up your balance with cryptocurrency"
@@ -74,15 +72,7 @@ const PUBLIC_COMMANDS = [
   {
     name: "help",
     description: "📖 Show all available commands"
-  }
-];
-
-// ===== STAFF SLASH COMMANDS (только Pay Access / Pay Access+) =====
-// Регистрируются только для GUILD, скрыты от обычных пользователей
-// default_member_permissions: "0" — скрыто от всех по умолчанию
-// После деплоя зайди: Server Settings → Integrations → Бот → Manage
-// и добавь роли Pay Access / Pay Access+ к каждой из этих команд
-const STAFF_COMMANDS = [
+  },
   {
     name: "viewadmins",
     description: "🔍 [Owner] Debug — list all users with Pay Access / Pay Access+ roles",
@@ -93,7 +83,6 @@ const STAFF_COMMANDS = [
     name: "forceadd",
     description: "🔧 [Pay Access] Manually add balance to a user",
     dm_permission: false,
-    default_member_permissions: "0",
     options: [
       {
         name: "user",
@@ -115,7 +104,6 @@ const STAFF_COMMANDS = [
     name: "addkey",
     description: "🔑 [Pay Access] Add keys to a product",
     dm_permission: false,
-    default_member_permissions: "0",
     options: [
       {
         name: "product",
@@ -156,7 +144,6 @@ const STAFF_COMMANDS = [
     name: "keylist",
     description: "📋 [Pay Access] View and manage available product keys",
     dm_permission: false,
-    default_member_permissions: "0",
     options: [
       {
         name: "product",
@@ -199,29 +186,19 @@ client.once("ready", async () => {
   try {
     console.log("🔄 Registering slash commands...");
 
-    // 1. Регистрируем публичные команды ГЛОБАЛЬНО (pay, balance, buy, help)
-    //    Они видны всем — включая Scripter
-    await rest.put(
-      Routes.applicationCommands(CLIENT_ID),
-      { body: PUBLIC_COMMANDS }
-    );
-    console.log("✅ Public commands registered globally!");
-
-    // 2. Регистрируем стафф-команды ТОЛЬКО для конкретного гильда
-    //    default_member_permissions: "0" — скрыто от всех по умолчанию
-    //    Затем вручную в Integrations добавь Pay Access / Pay Access+
     if (GUILD_ID) {
+      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
+      console.log("🗑️  Cleared global commands to prevent duplicates");
+
       await rest.put(
         Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-        { body: STAFF_COMMANDS }
+        { body: SLASH_COMMANDS }
       );
-      console.log(`✅ Staff commands registered for guild ${GUILD_ID}!`);
-      console.log("⚠️  ВАЖНО: Зайди в Server Settings → Integrations → Бот → Manage");
-      console.log("   и добавь роли 'Pay Access' / 'Pay Access+' к командам стаффа!");
+      console.log(`✅ Slash commands registered for guild ${GUILD_ID}!`);
     } else {
-      console.warn("⚠️ GUILD_ID не задан — стафф-команды не зарегистрированы!");
+      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: SLASH_COMMANDS });
+      console.log("✅ Slash commands registered globally!");
     }
-
   } catch (err) {
     console.error("❌ Failed to register slash commands:", err);
   }
@@ -244,22 +221,6 @@ function memberHasRole(member, roleName, roleId = "") {
   }
   const target = normalizeRoleName(roleName);
   return member.roles.cache.some(r => normalizeRoleName(r.name) === target);
-}
-
-/**
- * Проверяет, является ли пользователь Scripter (только публичные команды)
- */
-async function isScripter(userId) {
-  for (const [, guild] of client.guilds.cache) {
-    let member;
-    try {
-      member = await guild.members.fetch({ user: userId, force: true });
-    } catch {
-      continue;
-    }
-    if (memberHasRole(member, ROLE_SCRIPTER)) return true;
-  }
-  return false;
 }
 
 async function getAccessTier(userId) {
@@ -319,37 +280,6 @@ async function getAccessPlusUsers() {
   }
 
   return users;
-}
-
-// ===== STAFF COMMAND ACCESS GUARD =====
-/**
- * Проверяет доступ к стафф-командам.
- * Scripter → отказ (только публичные команды)
- * Pay Access / Pay Access+ → доступ
- */
-async function checkStaffAccess(interaction) {
-  const tier = await getAccessTier(interaction.user.id);
-
-  if (!tier) {
-    // Дополнительно проверяем — вдруг это Scripter пытается что-то сделать
-    const scripter = await isScripter(interaction.user.id);
-    const desc = scripter
-      ? `У роли **${ROLE_SCRIPTER}** нет доступа к командам стаффа.\nДоступные тебе команды: \`/pay\`, \`/balance\`, \`/buy\`, \`/help\``
-      : `Эта команда требует роль **${ROLE_ACCESS}** или **${ROLE_ACCESS_PLUS}**.`;
-
-    await interaction.editReply({
-      embeds: [
-        new EmbedBuilder()
-          .setTitle("⛔  Access Denied")
-          .setDescription(desc)
-          .setColor(ERROR_COLOR)
-          .setFooter({ text: FOOTER_TEXT })
-      ]
-    });
-    return false;
-  }
-
-  return tier;
 }
 
 // ===== BALANCE HELPERS =====
@@ -442,6 +372,10 @@ async function getBalance(userId) {
 }
 
 // ===== PAYMENT MESSAGE TRACKING =====
+/**
+ * Stores payment_id -> { userId, messageId, channelId }
+ * This allows us to edit the message when status changes
+ */
 const paymentMessages = new Map();
 
 async function savePaymentMessage(paymentId, userId, messageId, channelId) {
@@ -455,6 +389,11 @@ async function getPaymentMessage(paymentId) {
 
 // ===== KEY HELPERS =====
 
+/**
+ * Returns the storage product_id for a given product + optional days tier.
+ * Auto Joiner keys are stored per-tier: "auto_joiner_1", "auto_joiner_2", "auto_joiner_3"
+ * Other products keep their plain id.
+ */
 function resolveStorageId(productId, days = null) {
   if (productId === "auto_joiner" && days) return `${productId}_${days}`;
   return productId;
@@ -540,6 +479,9 @@ async function addKeys(storageId, keys) {
   return true;
 }
 
+/**
+ * Returns only AVAILABLE (not used) keys for the given storageId.
+ */
 async function getAvailableProductKeys(storageId, page = 1, perPage = 10) {
   console.log(`📋 Getting available keys for storageId: ${storageId}, page: ${page}`);
   const from = (page - 1) * perPage;
@@ -641,6 +583,7 @@ const ADMIN_COLOR   = 0xE67E22;
 const PLUS_COLOR    = 0xA855F7;
 const FUNPAY_COLOR  = 0xFF6B35;
 
+// ✅ Updated footer branding
 const FOOTER_TEXT = "⚡ Nameless Paysystem";
 
 // ===== EMBEDS =====
@@ -673,8 +616,7 @@ function buildMainMenuEmbed() {
         name:   "🔑  Access Roles",
         value:
           `**${ROLE_ACCESS}** — Can use \`/forceadd\`, \`/addkey\`, \`/keylist\`\n` +
-          `**${ROLE_ACCESS_PLUS}** — All above + receives payment notifications\n` +
-          `**${ROLE_SCRIPTER}** — Can use \`/pay\`, \`/balance\`, \`/buy\`, \`/help\``,
+          `**${ROLE_ACCESS_PLUS}** — All above + receives payment notifications`,
         inline: false
       }
     )
@@ -719,6 +661,7 @@ async function buildShopEmbed() {
         inline: false
       });
     } else {
+      // Show per-tier stock
       const tierInfo = await Promise.all(
         product.tiers.map(async t => {
           const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
@@ -765,7 +708,7 @@ function buildFunPayEmbed() {
 function buildPaymentEmbed(payment, currency, status = "waiting") {
   const cur = CURRENCIES[currency] || { emoji: "🪙", name: currency, color: BRAND_COLOR };
   const cfg = STATUS_CONFIG[status];
-
+  
   const embed = new EmbedBuilder()
     .setTitle(`${cfg.icon}  ${cfg.title} — ${cur.emoji} ${cur.name}`)
     .setDescription(cfg.desc)
@@ -793,9 +736,11 @@ function buildPaymentEmbed(payment, currency, status = "waiting") {
     );
   } else if (["confirming", "confirmed"].includes(status)) {
     embed.addFields(
-      { name: "💵  Amount",   value: `\`${payment.price_amount} USD\``, inline: true },
-      { name: "🪙  Currency", value: `\`${payment.pay_currency}\``,     inline: true }
+      { name: "💵  Amount",   value: `\`${payment.price_amount} USD\``,  inline: true },
+      { name: "🪙  Currency", value: `\`${payment.pay_currency}\``, inline: true }
     );
+  } else if (status === "finished") {
+    // Will be updated with balance info in webhook handler
   }
 
   return embed;
@@ -942,6 +887,10 @@ function buildAmountRow() {
   );
 }
 
+/**
+ * Builds pagination + delete button row for /keylist.
+ * storageId is the resolved storage id (e.g. "auto_joiner_1").
+ */
 function buildKeyListButtons(page, totalPages, storageId) {
   const buttons = [];
 
@@ -1043,22 +992,29 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // ── STAFF COMMANDS ──
-    // Все они требуют Pay Access / Pay Access+
-    // Scripter получает ошибку с объяснением
-
     // /addkey
     if (commandName === "addkey") {
       await interaction.deferReply({ ephemeral: true });
 
-      const tier = await checkStaffAccess(interaction);
-      if (!tier) return;
+      const tier = await getAccessTier(interaction.user.id);
+      if (!tier) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
 
       const productId  = interaction.options.getString("product");
       const tierDays   = interaction.options.getInteger("tier");
       const keysText   = interaction.options.getString("keys");
       const file       = interaction.options.getAttachment("file");
 
+      // Auto Joiner requires a tier selection
       if (productId === "auto_joiner" && !tierDays) {
         return interaction.editReply({
           embeds: [
@@ -1082,7 +1038,7 @@ client.on("interactionCreate", async (interaction) => {
         keys = keysText.split(/[\s\n]+/).filter(k => k.trim().length > 0);
       } else if (file) {
         try {
-          const response    = await axios.get(file.url);
+          const response  = await axios.get(file.url);
           const fileContent = response.data;
           keys = fileContent.split(/[\s\n]+/).filter(k => k.trim().length > 0);
         } catch (err) {
@@ -1158,14 +1114,25 @@ client.on("interactionCreate", async (interaction) => {
     if (commandName === "keylist") {
       await interaction.deferReply({ ephemeral: true });
 
-      const accessTier = await checkStaffAccess(interaction);
-      if (!accessTier) return;
+      const accessTier = await getAccessTier(interaction.user.id);
+      if (!accessTier) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
 
       const productId = interaction.options.getString("product");
       const tierDays  = interaction.options.getInteger("tier");
       const page      = interaction.options.getInteger("page") || 1;
       const perPage   = 10;
 
+      // Auto Joiner requires a tier selection
       if (productId === "auto_joiner" && !tierDays) {
         return interaction.editReply({
           embeds: [
@@ -1182,6 +1149,7 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       const storageId = resolveStorageId(productId, tierDays);
+
       return sendKeyListEmbed(interaction, storageId, productId, tierDays, page, perPage);
     }
 
@@ -1279,8 +1247,21 @@ client.on("interactionCreate", async (interaction) => {
     if (commandName === "forceadd") {
       await interaction.deferReply({ ephemeral: true });
 
-      const accessTierLevel = await checkStaffAccess(interaction);
-      if (!accessTierLevel) return;
+      const accessTierLevel = await getAccessTier(interaction.user.id);
+
+      if (!accessTierLevel) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription(
+                `This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
 
       const targetUser = interaction.options.getUser("user");
       const amount     = interaction.options.getNumber("amount");
@@ -1378,7 +1359,8 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // buy_<productId>_<days>
+    // ── Buy product buttons ──
+    // customId format: buy_<productId>_<days>
     if (interaction.customId.startsWith("buy_")) {
       console.log(`🛒 Purchase initiated by ${interaction.user.tag}: ${interaction.customId}`);
       await interaction.deferReply({ ephemeral: true });
@@ -1438,6 +1420,7 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
+        // Use tier-specific storage id for Auto Joiner
         const storageId = resolveStorageId(productId, days);
         const key = await getRandomAvailableKey(storageId);
 
@@ -1492,20 +1475,20 @@ client.on("interactionCreate", async (interaction) => {
         });
 
         try {
-          const keyFileContent =
-            `${product.name} License Key\n` +
-            `========================\n\n` +
-            `Product: ${product.name}\n` +
-            `Duration: ${tier.days} day${tier.days > 1 ? "s" : ""}\n` +
-            `Price: $${tier.price}\n` +
-            `Purchase Date: ${new Date().toISOString()}\n\n` +
-            `License Key:\n${key.key_value}\n\n` +
-            `========================\n` +
-            `Keep this key safe and secure.\n`;
-
+          // Create text file with the key
+          const keyFileContent = `${product.name} License Key\n` +
+                                `========================\n\n` +
+                                `Product: ${product.name}\n` +
+                                `Duration: ${tier.days} day${tier.days > 1 ? "s" : ""}\n` +
+                                `Price: $${tier.price}\n` +
+                                `Purchase Date: ${new Date().toISOString()}\n\n` +
+                                `License Key:\n${key.key_value}\n\n` +
+                                `========================\n` +
+                                `Keep this key safe and secure.\n`;
+          
           const keyAttachment = new AttachmentBuilder(
-            Buffer.from(keyFileContent, "utf-8"),
-            { name: `${product.name.replace(/\s+/g, "_")}_Key_${Date.now()}.txt` }
+            Buffer.from(keyFileContent, 'utf-8'),
+            { name: `${product.name.replace(/\s+/g, '_')}_Key_${Date.now()}.txt` }
           );
 
           await interaction.user.send({
@@ -1514,9 +1497,9 @@ client.on("interactionCreate", async (interaction) => {
                 .setTitle(`🔑  ${product.name} Key`)
                 .setDescription(`Your **${tier.days} day${tier.days > 1 ? "s" : ""}** license key:`)
                 .addFields(
-                  { name: "🔐 License Key", value: `\`${key.key_value}\``,                              inline: false },
-                  { name: "⏱️ Duration",    value: `\`${tier.days} day${tier.days > 1 ? "s" : ""}\``,  inline: true  },
-                  { name: "💵 Price",       value: `\`$${tier.price}\``,                                inline: true  }
+                  { name: "🔐 License Key", value: `\`${key.key_value}\``, inline: false },
+                  { name: "⏱️ Duration",    value: `\`${tier.days} day${tier.days > 1 ? "s" : ""}\``, inline: true },
+                  { name: "💵 Price",       value: `\`$${tier.price}\``,                               inline: true }
                 )
                 .setColor(SUCCESS_COLOR)
                 .setFooter({ text: FOOTER_TEXT })
@@ -1545,9 +1528,10 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // keylist_delete_<storageId>_<page>
+    // ── Key list: delete button ──
+    // customId: keylist_delete_<storageId>_<page>
     if (interaction.customId.startsWith("keylist_delete_")) {
-      const withoutPrefix  = interaction.customId.slice("keylist_delete_".length);
+      const withoutPrefix  = interaction.customId.slice("keylist_delete_".length); // "<storageId>_<page>"
       const lastUnderscore = withoutPrefix.lastIndexOf("_");
       const storageId      = withoutPrefix.substring(0, lastUnderscore);
       const page           = withoutPrefix.substring(lastUnderscore + 1);
@@ -1567,7 +1551,7 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.showModal(modal);
     }
 
-    // keylist pagination / refresh
+    // ── Key list: pagination / refresh ──
     if (interaction.customId.startsWith("keylist_")) {
       await interaction.deferUpdate();
 
@@ -1576,9 +1560,9 @@ client.on("interactionCreate", async (interaction) => {
 
       let rest;
       if (isRefresh) {
-        rest = withoutPrefix.slice("refresh_".length);
+        rest = withoutPrefix.slice("refresh_".length); // "<storageId>_<page>"
       } else {
-        rest = withoutPrefix;
+        rest = withoutPrefix; // "<storageId>_<page>"
       }
 
       const lastUnderscore = rest.lastIndexOf("_");
@@ -1586,11 +1570,13 @@ client.on("interactionCreate", async (interaction) => {
       const page           = parseInt(rest.substring(lastUnderscore + 1));
       const perPage        = 10;
 
+      // Reconstruct productId and tierDays from storageId
       const { productId, tierDays } = parseStorageId(storageId);
+
       return sendKeyListEdit(interaction, storageId, productId, tierDays, page, perPage);
     }
 
-    // amount buttons
+    // ── Amount buttons ──
     if (interaction.customId.startsWith("amt_")) {
       const userId  = interaction.user.id;
       const pending = pendingPayments.get(userId);
@@ -1636,12 +1622,14 @@ client.on("interactionCreate", async (interaction) => {
       const method = interaction.values[0];
 
       if (method === "funpay") {
+        // Показываем информацию о FunPay реселлерах
         const backButton = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId("btn_buy")
             .setLabel("◀️ Back to Payment Methods")
             .setStyle(ButtonStyle.Secondary)
         );
+
         return interaction.update({
           embeds: [buildFunPayEmbed()],
           components: [backButton]
@@ -1649,6 +1637,7 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (method === "balance") {
+        // Показываем обычное меню продуктов
         const embed = await buildShopEmbed();
         return interaction.update({
           embeds: [embed],
@@ -1676,6 +1665,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      // Show per-tier stock for shop view
       const tierInfo = await Promise.all(
         product.tiers.map(async t => {
           const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
@@ -1722,6 +1712,7 @@ client.on("interactionCreate", async (interaction) => {
   // ──────────── MODAL SUBMITS ────────────
   if (interaction.isModalSubmit()) {
 
+    // Custom payment amount
     if (interaction.customId === "modal_custom_amount") {
       const userId  = interaction.user.id;
       const pending = pendingPayments.get(userId);
@@ -1760,7 +1751,8 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // modal_delete_key_<storageId>_<page>
+    // Delete key by number
+    // customId: modal_delete_key_<storageId>_<page>
     if (interaction.customId.startsWith("modal_delete_key_")) {
       await interaction.deferReply({ ephemeral: true });
 
@@ -1785,7 +1777,10 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      const globalOffset = keyNumber - 1;
+      // Fetch all available keys to find by global index
+      // The key number shown is (page-1)*perPage + local_index + 1
+      // So find which page / offset the key is on
+      const globalOffset = keyNumber - 1; // 0-based
       const targetPage   = Math.floor(globalOffset / perPage) + 1;
       const localIndex   = globalOffset % perPage;
 
@@ -1829,9 +1824,9 @@ client.on("interactionCreate", async (interaction) => {
             .setTitle("🗑️  Key Deleted")
             .setDescription(`Key **#${keyNumber}** has been permanently removed from **${product.name}${tierLabel}**.`)
             .addFields(
-              { name: "🔑 Deleted Key",     value: `\`${keyRecord.key_value.substring(0, 30)}...\``, inline: false },
-              { name: "📦 Remaining Stock", value: `\`${newStock}\` keys available`,                  inline: true  },
-              { name: "🛠️ Deleted By",      value: `<@${interaction.user.id}>`,                      inline: true  }
+              { name: "🔑 Deleted Key",  value: `\`${keyRecord.key_value.substring(0, 30)}...\``, inline: false },
+              { name: "📦 Remaining Stock", value: `\`${newStock}\` keys available`,               inline: true },
+              { name: "🛠️ Deleted By",   value: `<@${interaction.user.id}>`,                      inline: true }
             )
             .setColor(ERROR_COLOR)
             .setFooter({ text: FOOTER_TEXT })
@@ -1845,6 +1840,11 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // ===== PARSE STORAGE ID =====
+/**
+ * Reverse of resolveStorageId.
+ * "auto_joiner_1" → { productId: "auto_joiner", tierDays: 1 }
+ * "notifier"      → { productId: "notifier",    tierDays: null }
+ */
 function parseStorageId(storageId) {
   const match = storageId.match(/^(.+?)_(\d+)$/);
   if (match && PRODUCTS[match[1]]) {
@@ -1945,11 +1945,12 @@ async function processPayment(interaction, userId, amount, currency) {
     const embed   = buildPaymentEmbed(payment, currency, "waiting");
 
     try {
-      const user      = await client.users.fetch(userId);
+      const user = await client.users.fetch(userId);
       const dmMessage = await user.send({ embeds: [embed] });
-
+      
+      // Save payment message ID for later updates
       await savePaymentMessage(payment.payment_id, userId, dmMessage.id, dmMessage.channel.id);
-
+      
       await interaction.editReply({
         embeds: [
           new EmbedBuilder()
@@ -2018,12 +2019,14 @@ app.post("/webhook", async (req, res) => {
     const cfg = STATUS_CONFIG[status];
     if (!cfg) return res.sendStatus(200);
 
+    // Get saved payment message info
     const msgInfo = await getPaymentMessage(payment_id);
-
+    
+    // Handle finished payment - add balance and send notifications
     if (status === "finished") {
       const success    = await addBalance(userId, amount);
       const newBalance = await getBalance(userId);
-
+      
       const embed = new EmbedBuilder()
         .setTitle(`${cfg.icon}  ${cfg.title}`)
         .setDescription(cfg.desc)
@@ -2042,24 +2045,32 @@ app.post("/webhook", async (req, res) => {
              .setDescription("Payment received but balance update failed. Contact support.");
       }
 
+      // Try to edit existing message if available
       if (msgInfo) {
         try {
-          const user    = await client.users.fetch(msgInfo.userId);
+          const user = await client.users.fetch(msgInfo.userId);
           const channel = await user.createDM();
           const message = await channel.messages.fetch(msgInfo.messageId);
           await message.edit({ embeds: [embed] });
           console.log(`✅ Updated payment message for ${payment_id}`);
         } catch (editErr) {
           console.error(`❌ Could not edit message for payment ${payment_id}:`, editErr.message);
+          // Fallback: send new message
           const payerUser = await client.users.fetch(userId).catch(() => null);
-          if (payerUser) await payerUser.send({ embeds: [embed] }).catch(() => {});
+          if (payerUser) {
+            await payerUser.send({ embeds: [embed] }).catch(() => {});
+          }
         }
       } else {
+        // No saved message, send new one
         console.log(`⚠️ No saved message for payment ${payment_id}, sending new message`);
         const payerUser = await client.users.fetch(userId).catch(() => null);
-        if (payerUser) await payerUser.send({ embeds: [embed] }).catch(() => {});
+        if (payerUser) {
+          await payerUser.send({ embeds: [embed] }).catch(() => {});
+        }
       }
 
+      // ALWAYS send Pay Access+ notifications on successful payment
       if (success) {
         const payerUser = await client.users.fetch(userId).catch(() => null);
         if (payerUser) {
@@ -2078,10 +2089,13 @@ app.post("/webhook", async (req, res) => {
             }
           }
           console.log(`📣 Notified ${notified} Pay Access+ member(s) about payment by ${payerUser.tag}`);
+        } else {
+          console.error(`⚠️ Could not fetch payer user ${userId} for notifications`);
         }
       }
 
     } else if (["confirming", "confirmed", "failed", "expired"].includes(status)) {
+      // Handle other statuses - just update the message
       const embed = new EmbedBuilder()
         .setTitle(`${cfg.icon}  ${cfg.title}`)
         .setDescription(cfg.desc)
@@ -2091,24 +2105,26 @@ app.post("/webhook", async (req, res) => {
 
       if (["confirming", "confirmed"].includes(status)) {
         embed.addFields(
-          { name: "💵  Amount",   value: `\`${amount} USD\``,   inline: true },
+          { name: "💵  Amount",   value: `\`${amount} USD\``,  inline: true },
           { name: "🪙  Currency", value: `\`${pay_currency}\``, inline: true }
         );
       }
 
       if (msgInfo) {
         try {
-          const user    = await client.users.fetch(msgInfo.userId);
+          const user = await client.users.fetch(msgInfo.userId);
           const channel = await user.createDM();
           const message = await channel.messages.fetch(msgInfo.messageId);
           await message.edit({ embeds: [embed] });
           console.log(`✅ Updated payment message for ${payment_id} (status: ${status})`);
         } catch (editErr) {
           console.error(`❌ Could not edit message for payment ${payment_id}:`, editErr.message);
+          // Fallback: send new message
           const user = await client.users.fetch(userId).catch(() => null);
           if (user) await user.send({ embeds: [embed] }).catch(() => {});
         }
       } else {
+        // No saved message, send new one
         const user = await client.users.fetch(userId).catch(() => null);
         if (user) await user.send({ embeds: [embed] }).catch(() => {});
       }
