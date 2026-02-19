@@ -218,6 +218,15 @@ const SLASH_COMMANDS = [
 ];
 
 // ===== REGISTER COMMANDS ON READY =====
+// ===== GLOBAL ERROR HANDLER (prevents crashes from unhandled Discord errors) =====
+client.on("error", (err) => {
+  console.error("❌ Discord client error:", err.message);
+});
+
+process.on("unhandledRejection", (err) => {
+  console.error("❌ Unhandled rejection:", err?.message || err);
+});
+
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
@@ -227,20 +236,24 @@ client.once("ready", async () => {
     console.log("🔄 Registering slash commands...");
 
     if (GUILD_ID) {
-      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: [] });
-      console.log("🗑️  Cleared global commands to prevent duplicates");
-
-      await rest.put(
-        Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-        { body: SLASH_COMMANDS }
-      );
-      console.log(`✅ Slash commands registered for guild ${GUILD_ID}!`);
+      try {
+        await rest.put(
+          Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
+          { body: SLASH_COMMANDS }
+        );
+        console.log(`✅ Slash commands registered for guild ${GUILD_ID}!`);
+      } catch (guildErr) {
+        console.warn(`⚠️ Guild command registration failed (Missing Access?), falling back to global. Error: ${guildErr.message}`);
+        console.warn("ℹ️ To fix: re-invite the bot with the 'applications.commands' OAuth2 scope.");
+        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: SLASH_COMMANDS });
+        console.log("✅ Slash commands registered globally (fallback)!");
+      }
     } else {
       await rest.put(Routes.applicationCommands(CLIENT_ID), { body: SLASH_COMMANDS });
       console.log("✅ Slash commands registered globally!");
     }
   } catch (err) {
-    console.error("❌ Failed to register slash commands:", err);
+    console.error("❌ Failed to register slash commands:", err.message);
   }
 
   client.user.setPresence({
@@ -1249,7 +1262,7 @@ client.on("interactionCreate", async (interaction) => {
 
     // /userlist — show active Notifier subscribers
     if (commandName === "userlist") {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
 
       const accessTier = await getAccessTier(interaction.user.id);
       if (!accessTier) {
@@ -1307,7 +1320,7 @@ client.on("interactionCreate", async (interaction) => {
 
     // /ban — revoke Notifier access from a user
     if (commandName === "ban") {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
 
       const accessTier = await getAccessTier(interaction.user.id);
       if (!accessTier) {
@@ -1367,7 +1380,7 @@ client.on("interactionCreate", async (interaction) => {
 
     // /compensate — add time to all active subscribers
     if (commandName === "compensate") {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
 
       const accessTier = await getAccessTier(interaction.user.id);
       if (!accessTier) {
@@ -1449,7 +1462,7 @@ client.on("interactionCreate", async (interaction) => {
 
     // /addkey
     if (commandName === "addkey") {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
 
       const tier = await getAccessTier(interaction.user.id);
       if (!tier) {
@@ -1566,7 +1579,7 @@ client.on("interactionCreate", async (interaction) => {
 
     // /keylist
     if (commandName === "keylist") {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
 
       const accessTier = await getAccessTier(interaction.user.id);
       if (!accessTier) {
@@ -1620,7 +1633,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
 
       const basicUsers = [];
       const plusUsers  = [];
@@ -1697,7 +1710,7 @@ client.on("interactionCreate", async (interaction) => {
 
     // /forceadd
     if (commandName === "forceadd") {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
 
       const accessTierLevel = await getAccessTier(interaction.user.id);
 
@@ -1815,7 +1828,7 @@ client.on("interactionCreate", async (interaction) => {
     // customId format: buy_<productId>_<days>
     if (interaction.customId.startsWith("buy_")) {
       console.log(`🛒 Purchase initiated by ${interaction.user.tag}: ${interaction.customId}`);
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
 
       try {
         const withoutPrefix  = interaction.customId.slice("buy_".length);
@@ -2144,7 +2157,7 @@ client.on("interactionCreate", async (interaction) => {
       pending.amount = amount;
       pendingPayments.set(userId, pending);
 
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
       await processPayment(interaction, userId, amount, pending.currency);
     }
   }
@@ -2290,13 +2303,13 @@ client.on("interactionCreate", async (interaction) => {
 
       pending.amount = amount;
       pendingPayments.set(userId, pending);
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
       await processPayment(interaction, userId, amount, pending.currency);
       return;
     }
 
     if (interaction.customId.startsWith("modal_delete_key_")) {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: 64 });
 
       const withoutPrefix  = interaction.customId.slice("modal_delete_key_".length);
       const lastUnderscore = withoutPrefix.lastIndexOf("_");
