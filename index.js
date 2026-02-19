@@ -83,6 +83,7 @@ const SLASH_COMMANDS = [
     name: "forceadd",
     description: "🔧 [Pay Access] Manually add balance to a user",
     dm_permission: false,
+    default_member_permissions: "0",
     options: [
       {
         name: "user",
@@ -104,6 +105,7 @@ const SLASH_COMMANDS = [
     name: "addkey",
     description: "🔑 [Pay Access] Add keys to a product",
     dm_permission: false,
+    default_member_permissions: "0",
     options: [
       {
         name: "product",
@@ -144,6 +146,7 @@ const SLASH_COMMANDS = [
     name: "keylist",
     description: "📋 [Pay Access] View and manage available product keys",
     dm_permission: false,
+    default_member_permissions: "0",
     options: [
       {
         name: "product",
