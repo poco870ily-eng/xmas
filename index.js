@@ -341,20 +341,28 @@ async function getNotifierAccessRole() {
 
   let guild;
   try {
-    guild = await client.guilds.fetch(guildId);
-    // Ensure members and roles are cached
-    await guild.members.fetch({ force: true });
+    // Get from cache first (bot is already in the guild), fallback to fetch
+    guild = client.guilds.cache.get(guildId);
+    if (!guild) {
+      guild = await client.guilds.fetch(guildId);
+    }
+    // Force fetch all roles into cache
+    await guild.roles.fetch();
   } catch (e) {
-    console.error("❌ Could not fetch guild:", e.message);
+    console.error("❌ Could not fetch guild/roles:", e.message);
     return { guild: null, role: null };
   }
+
+  console.log(`[DEBUG] Roles in guild "${guild.name}":`, guild.roles.cache.map(r => `"${r.name}"`).join(", "));
 
   const role = guild.roles.cache.find(
     r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_NOTIFIER_ACCESS)
   );
 
   if (!role) {
-    console.warn(`⚠️ Role "${ROLE_NOTIFIER_ACCESS}" not found in guild "${guild.name}". Make sure a role named exactly "${ROLE_NOTIFIER_ACCESS}" exists.`);
+    console.warn(`⚠️ Role "${ROLE_NOTIFIER_ACCESS}" not found. Available roles listed above.`);
+  } else {
+    console.log(`✅ Found role "${role.name}" (ID: ${role.id})`);
   }
 
   return { guild, role };
@@ -365,35 +373,36 @@ async function getNotifierAccessRole() {
  */
 async function giveNotifierRole(userId) {
   const { guild, role } = await getNotifierAccessRole();
-  if (!guild || !role) return false;
-
+  if (!guild || !role) {
+    console.error(`❌ giveNotifierRole failed: guild=${!!guild}, role=${!!role}`);
+    return false;
+  }
   try {
     const member = await guild.members.fetch({ user: userId, force: true });
-    await member.roles.add(role);
-    console.log(`✅ Gave "${ROLE_NOTIFIER_ACCESS}" role to ${userId}`);
+    await member.roles.add(role.id);
+    console.log(`✅ Gave "${ROLE_NOTIFIER_ACCESS}" role (${role.id}) to ${userId}`);
     return true;
   } catch (e) {
-    console.error(`❌ Could not give role to ${userId}:`, e.message);
+    console.error(`❌ Could not give role to ${userId}:`, e.message, e.stack);
     return false;
   }
 }
 
-/**
- * Remove the "Access" role from a user.
- */
 async function removeNotifierRole(userId) {
   const { guild, role } = await getNotifierAccessRole();
-  if (!guild || !role) return false;
-
+  if (!guild || !role) {
+    console.error(`❌ removeNotifierRole failed: guild=${!!guild}, role=${!!role}`);
+    return false;
+  }
   try {
     const member = await guild.members.fetch({ user: userId, force: true });
     if (member.roles.cache.has(role.id)) {
-      await member.roles.remove(role);
+      await member.roles.remove(role.id);
       console.log(`✅ Removed "${ROLE_NOTIFIER_ACCESS}" role from ${userId}`);
     }
     return true;
   } catch (e) {
-    console.error(`❌ Could not remove role from ${userId}:`, e.message);
+    console.error(`❌ Could not remove role from ${userId}:`, e.message, e.stack);
     return false;
   }
 }
