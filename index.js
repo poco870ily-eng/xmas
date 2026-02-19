@@ -75,6 +75,10 @@ const SLASH_COMMANDS = [
     description: "📖 Show all available commands"
   },
   {
+    name: "checktime",
+    description: "⏰ Check your remaining Notifier subscription time"
+  },
+  {
     name: "viewadmins",
     description: "🔍 [Owner] Debug — list all users with Pay Access / Pay Access+ roles",
     dm_permission: false,
@@ -99,15 +103,21 @@ const SLASH_COMMANDS = [
     ]
   },
   {
-    name: "compensate",
-    description: "⏰ [Pay Access] Add extra time to ALL active Notifier subscribers",
+    name: "addtime",
+    description: "⏰ [Pay Access] Add time to a specific Notifier subscriber",
     dm_permission: false,
     options: [
+      {
+        name: "user",
+        description: "The user to add time to",
+        type: ApplicationCommandOptionType.User,
+        required: true
+      },
       {
         name: "days",
         description: "Days to add (0 or more)",
         type: ApplicationCommandOptionType.Integer,
-        required: true,
+        required: false,
         min_value: 0,
         max_value: 365
       },
@@ -118,6 +128,45 @@ const SLASH_COMMANDS = [
         required: false,
         min_value: 0,
         max_value: 23
+      },
+      {
+        name: "minutes",
+        description: "Minutes to add (0 or more)",
+        type: ApplicationCommandOptionType.Integer,
+        required: false,
+        min_value: 0,
+        max_value: 59
+      }
+    ]
+  },
+  {
+    name: "compensate",
+    description: "⏰ [Pay Access] Add extra time to ALL active Notifier subscribers",
+    dm_permission: false,
+    options: [
+      {
+        name: "days",
+        description: "Days to add (0 or more)",
+        type: ApplicationCommandOptionType.Integer,
+        required: false,
+        min_value: 0,
+        max_value: 365
+      },
+      {
+        name: "hours",
+        description: "Hours to add (0 or more)",
+        type: ApplicationCommandOptionType.Integer,
+        required: false,
+        min_value: 0,
+        max_value: 23
+      },
+      {
+        name: "minutes",
+        description: "Minutes to add (0 or more)",
+        type: ApplicationCommandOptionType.Integer,
+        required: false,
+        min_value: 0,
+        max_value: 59
       }
     ]
   },
@@ -342,16 +391,8 @@ async function getAccessPlusUsers() {
 
 // ===== NOTIFIER ACCESS ROLE HELPERS =====
 
-/**
- * Find the "Access" role in the primary guild.
- */
-/**
- * Find the ROLE_NOTIFIER_ACCESS role in a guild object.
- * Pass interaction.guild directly — no API fetch needed.
- */
 async function findNotifierRole(guild) {
   if (!guild) return null;
-  // Roles should already be cached on an interaction guild, but fetch just in case
   if (guild.roles.cache.size <= 1) {
     await guild.roles.fetch();
   }
@@ -366,13 +407,8 @@ async function findNotifierRole(guild) {
   return role || null;
 }
 
-/**
- * Give the "Access" role to a user.
- * guild — pass interaction.guild from the interaction context.
- */
 async function giveNotifierRole(userId, guild) {
   if (!guild) {
-    // Fallback: try all cached guilds
     for (const [, g] of client.guilds.cache) {
       const result = await giveNotifierRole(userId, g);
       if (result) return true;
@@ -393,13 +429,8 @@ async function giveNotifierRole(userId, guild) {
   }
 }
 
-/**
- * Remove the "Access" role from a user.
- * guild — pass interaction.guild from the interaction context, or null for background tasks.
- */
 async function removeNotifierRole(userId, guild) {
   if (!guild) {
-    // Fallback: try all cached guilds
     for (const [, g] of client.guilds.cache) {
       await removeNotifierRole(userId, g);
     }
@@ -422,20 +453,9 @@ async function removeNotifierRole(userId, guild) {
 
 // ===== SUBSCRIPTION HELPERS =====
 
-/**
- * Add or extend a Notifier subscription for a user.
- * If user already has an active subscription, extends it by `days` days.
- * Otherwise creates a new one starting from now.
- *
- * Supabase table: subscriptions
- *   user_id    TEXT  (primary/unique)
- *   expires_at TIMESTAMPTZ
- *   created_at TIMESTAMPTZ (default now())
- */
 async function addSubscription(userId, days) {
   const userIdStr = userId.toString();
 
-  // Fetch existing subscription
   const { data, error: selectError } = await supabase
     .from("subscriptions")
     .select("expires_at")
@@ -446,7 +466,6 @@ async function addSubscription(userId, days) {
 
   if (data) {
     const existing = new Date(data.expires_at);
-    // Extend from current expiry if it's in the future
     if (existing > baseDate) baseDate = existing;
   } else if (selectError && selectError.code !== "PGRST116") {
     console.error("❌ Subscription select error:", selectError.message);
@@ -473,9 +492,44 @@ async function addSubscription(userId, days) {
 }
 
 /**
- * Get subscription info for a user.
- * Returns { expires_at } or null if not found / expired.
+ * Add time in milliseconds to a specific user's subscription
  */
+async function addTimeToUserSubscription(userId, ms) {
+  const userIdStr = userId.toString();
+
+  const { data, error: selectError } = await supabase
+    .from("subscriptions")
+    .select("expires_at")
+    .eq("user_id", userIdStr)
+    .single();
+
+  if (selectError && selectError.code !== "PGRST116") {
+    console.error("❌ Subscription select error:", selectError.message);
+    return false;
+  }
+
+  if (!data) {
+    console.log(`⚠️ No subscription found for user ${userIdStr}`);
+    return false;
+  }
+
+  const currentExpiry = new Date(data.expires_at);
+  const newExpiry = new Date(currentExpiry.getTime() + ms);
+
+  const { error } = await supabase
+    .from("subscriptions")
+    .update({ expires_at: newExpiry.toISOString() })
+    .eq("user_id", userIdStr);
+
+  if (error) {
+    console.error("❌ Subscription update error:", error.message);
+    return false;
+  }
+
+  console.log(`✅ Added time to ${userIdStr}. New expiry: ${newExpiry.toISOString()}`);
+  return true;
+}
+
 async function getSubscription(userId) {
   const { data } = await supabase
     .from("subscriptions")
@@ -485,13 +539,10 @@ async function getSubscription(userId) {
 
   if (!data) return null;
   const expires = new Date(data.expires_at);
-  if (expires <= new Date()) return null; // expired
+  if (expires <= new Date()) return null;
   return { expires_at: expires };
 }
 
-/**
- * Delete a subscription record from DB.
- */
 async function removeSubscription(userId) {
   const { error } = await supabase
     .from("subscriptions")
@@ -501,9 +552,6 @@ async function removeSubscription(userId) {
   return !error;
 }
 
-/**
- * Get ALL active subscriptions (expires_at > now).
- */
 async function getAllActiveSubscriptions() {
   const { data, error } = await supabase
     .from("subscriptions")
@@ -518,9 +566,6 @@ async function getAllActiveSubscriptions() {
   return data || [];
 }
 
-/**
- * Add extra time (ms) to ALL currently active subscriptions.
- */
 async function addTimeToAllSubscriptions(ms) {
   const subs = await getAllActiveSubscriptions();
   if (subs.length === 0) return 0;
@@ -538,9 +583,6 @@ async function addTimeToAllSubscriptions(ms) {
   return updated;
 }
 
-/**
- * Periodic check: remove expired subscriptions and revoke roles.
- */
 async function checkExpiredSubscriptions() {
   console.log("🔍 Checking for expired Notifier subscriptions...");
 
@@ -564,7 +606,6 @@ async function checkExpiredSubscriptions() {
     await removeNotifierRole(sub.user_id);
     await removeSubscription(sub.user_id);
 
-    // Notify user
     try {
       const user = await client.users.fetch(sub.user_id);
       await user.send({
@@ -790,7 +831,7 @@ const PRODUCTS = {
     name:        "Notifier",
     emoji:       "🔔",
     description: "Get access to the #no channel with real-time alerts",
-    isAccess:    true, // Role-based product — gives "Access" role
+    isAccess:    true,
     tiers: [
       { days: 3,  price: 20 },
       { days: 7,  price: 50 },
@@ -867,12 +908,12 @@ function buildMainMenuEmbed() {
     .addFields(
       {
         name:   "💳  Payments",
-        value:  "`/pay` — Start a crypto top-up\n`/balance` — Check your balance\n`/buy` — Purchase products",
+        value:  "`/pay` — Start a crypto top-up\n`/balance` — Check your balance\n`/buy` — Purchase products\n`/checktime` — Check Notifier time",
         inline: true
       },
       {
         name:   "🔧  Staff",
-        value:  "`/forceadd` — Add balance to a user\n`/addkey` — Add product keys\n`/keylist` — Manage keys\n`/userlist` — Active subscribers\n`/ban` — Revoke access\n`/compensate` — Add time to all",
+        value:  "`/forceadd` — Add balance to a user\n`/addtime` — Add time to user\n`/addkey` — Add product keys\n`/keylist` — Manage keys\n`/userlist` — Active subscribers\n`/ban` — Revoke access\n`/compensate` — Add time to all",
         inline: true
       },
       {
@@ -926,7 +967,6 @@ async function buildShopEmbed() {
 
   for (const [, product] of Object.entries(PRODUCTS)) {
     if (product.isAccess) {
-      // Notifier — show day tiers with prices (no stock)
       const tierInfo = product.tiers.map(t =>
         `**${t.days} day${t.days > 1 ? "s" : ""}** — **$${t.price}**  🔔 Role access`
       );
@@ -1226,6 +1266,50 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
+    // /checktime
+    if (commandName === "checktime") {
+      await interaction.deferReply({ flags: 64 });
+
+      const sub = await getSubscription(interaction.user.id);
+
+      if (!sub) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⏰  No Active Subscription")
+              .setDescription(
+                "You don't have an active **Notifier** subscription.\n\n" +
+                "Use `/buy` to purchase access!"
+              )
+              .setColor(NEUTRAL_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const now = new Date();
+      const expires = new Date(sub.expires_at);
+      const remaining = expires - now;
+      const timeLeft = formatDuration(remaining);
+      const unixExpiry = Math.floor(expires.getTime() / 1000);
+
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("⏰  Notifier Subscription Status")
+            .setDescription(`Your **Notifier** access is active!`)
+            .addFields(
+              { name: "⏱️ Time Remaining", value: `\`${timeLeft}\``,                    inline: true },
+              { name: "📅 Expires",        value: `<t:${unixExpiry}:F>`,                inline: true },
+              { name: "🔔 Status",         value: `**Active** — ${ROLE_NOTIFIER_ACCESS} role`, inline: false }
+            )
+            .setColor(ACCESS_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
+    }
+
     // /buy
     if (commandName === "buy") {
       const embed = new EmbedBuilder()
@@ -1300,7 +1384,6 @@ client.on("interactionCreate", async (interaction) => {
         return `**${i + 1}.** <@${sub.user_id}> — ⏱️ \`${timeLeft}\` remaining (<t:${unixTs}:R>)`;
       });
 
-      // Split into chunks of 20 if needed
       const chunks = [];
       for (let i = 0; i < lines.length; i += 20) {
         chunks.push(lines.slice(i, i + 20).join("\n"));
@@ -1336,13 +1419,11 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       const targetUser = interaction.options.getUser("user");
-
       const sub = await getSubscription(targetUser.id);
 
       await removeNotifierRole(targetUser.id, interaction.guild);
       await removeSubscription(targetUser.id);
 
-      // DM the banned user
       try {
         await targetUser.send({
           embeds: [
@@ -1368,10 +1449,123 @@ client.on("interactionCreate", async (interaction) => {
                 : `Revoked access from <@${targetUser.id}>. (No active subscription was found in DB.)`
             )
             .addFields(
-              { name: "👤 User",    value: `<@${targetUser.id}> (\`${targetUser.tag}\`)`, inline: true },
-              { name: "🛠️ By",     value: `<@${interaction.user.id}>`,                  inline: true }
+              { name: "👤 User", value: `<@${targetUser.id}> (\`${targetUser.tag}\`)`, inline: true },
+              { name: "🛠️ By",  value: `<@${interaction.user.id}>`,                  inline: true }
             )
             .setColor(ERROR_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
+    }
+
+    // /addtime — add time to a specific user
+    if (commandName === "addtime") {
+      await interaction.deferReply({ flags: 64 });
+
+      const accessTier = await getAccessTier(interaction.user.id);
+      if (!accessTier) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const targetUser = interaction.options.getUser("user");
+      const days       = interaction.options.getInteger("days")    || 0;
+      const hours      = interaction.options.getInteger("hours")   || 0;
+      const minutes    = interaction.options.getInteger("minutes") || 0;
+
+      if (days === 0 && hours === 0 && minutes === 0) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Invalid Input")
+              .setDescription("Please specify at least 1 day, 1 hour, or 1 minute to add.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const sub = await getSubscription(targetUser.id);
+      if (!sub) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  No Active Subscription")
+              .setDescription(
+                `<@${targetUser.id}> doesn't have an active **Notifier** subscription.\n\n` +
+                `They need to purchase access first using \`/buy\`.`
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const totalMs = (days * 24 * 60 * 60 + hours * 60 * 60 + minutes * 60) * 1000;
+      const success = await addTimeToUserSubscription(targetUser.id, totalMs);
+
+      if (!success) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Database Error")
+              .setDescription("Failed to add time. Check server logs.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const updatedSub = await getSubscription(targetUser.id);
+      const unixExpiry = updatedSub ? Math.floor(new Date(updatedSub.expires_at).getTime() / 1000) : null;
+
+      const parts = [];
+      if (days > 0)    parts.push(`${days}d`);
+      if (hours > 0)   parts.push(`${hours}h`);
+      if (minutes > 0) parts.push(`${minutes}м`);
+      const label = parts.join(" ");
+
+      try {
+        await targetUser.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🎁  Extra Time Added!")
+              .setDescription(
+                `An administrator has added **+${label}** to your Notifier subscription!`
+              )
+              .addFields(
+                { name: "⏱️ Time Added",  value: `\`+${label}\``,                           inline: true },
+                { name: "📅 New Expiry",  value: unixExpiry ? `<t:${unixExpiry}:F>` : "Unknown", inline: true }
+              )
+              .setColor(SUCCESS_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      } catch {
+        console.log(`⚠️ Could not DM ${targetUser.tag} about time addition`);
+      }
+
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("⏰  Time Added Successfully")
+            .setDescription(`Added **+${label}** to <@${targetUser.id}>'s Notifier subscription.`)
+            .addFields(
+              { name: "👤 Target User", value: `<@${targetUser.id}> (\`${targetUser.tag}\`)`, inline: true },
+              { name: "⏱️ Time Added",  value: `\`+${label}\``,                              inline: true },
+              { name: "📅 New Expiry",  value: unixExpiry ? `<t:${unixExpiry}:F>` : "Unknown", inline: false },
+              { name: "🛠️ By",         value: `<@${interaction.user.id}>`,                   inline: true }
+            )
+            .setColor(SUCCESS_COLOR)
             .setFooter({ text: FOOTER_TEXT })
             .setTimestamp()
         ]
@@ -1395,38 +1589,43 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      const days  = interaction.options.getInteger("days")  || 0;
-      const hours = interaction.options.getInteger("hours") || 0;
+      const days    = interaction.options.getInteger("days")    || 0;
+      const hours   = interaction.options.getInteger("hours")   || 0;
+      const minutes = interaction.options.getInteger("minutes") || 0;
 
-      if (days === 0 && hours === 0) {
+      if (days === 0 && hours === 0 && minutes === 0) {
         return interaction.editReply({
           embeds: [
             new EmbedBuilder()
               .setTitle("❌  Invalid Input")
-              .setDescription("Please specify at least 1 day or 1 hour to compensate.")
+              .setDescription("Please specify at least 1 day, 1 hour, or 1 minute to compensate.")
               .setColor(ERROR_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ]
         });
       }
 
-      const totalMs    = (days * 24 * 60 * 60 + hours * 60 * 60) * 1000;
+      const totalMs    = (days * 24 * 60 * 60 + hours * 60 * 60 + minutes * 60) * 1000;
       const subsBefore = await getAllActiveSubscriptions();
       const count      = await addTimeToAllSubscriptions(totalMs);
 
-      // Notify each subscriber
       let dmsOk = 0;
       for (const sub of subsBefore) {
         try {
           const user = await client.users.fetch(sub.user_id);
+          
+          const parts = [];
+          if (days > 0)    parts.push(`${days} day${days > 1 ? "s" : ""}`);
+          if (hours > 0)   parts.push(`${hours} hour${hours > 1 ? "s" : ""}`);
+          if (minutes > 0) parts.push(`${minutes} minute${minutes > 1 ? "s" : ""}`);
+          const fullLabel = parts.join(" and ");
+
           await user.send({
             embeds: [
               new EmbedBuilder()
                 .setTitle("🎁  Time Compensation!")
                 .setDescription(
-                  `An administrator has added **${days > 0 ? `${days} day${days > 1 ? "s" : ""}` : ""}` +
-                  `${days > 0 && hours > 0 ? " and " : ""}` +
-                  `${hours > 0 ? `${hours} hour${hours > 1 ? "s" : ""}` : ""}** to your Notifier subscription!`
+                  `An administrator has added **${fullLabel}** to your Notifier subscription!`
                 )
                 .setColor(SUCCESS_COLOR)
                 .setFooter({ text: FOOTER_TEXT })
@@ -1439,8 +1638,11 @@ client.on("interactionCreate", async (interaction) => {
         }
       }
 
-      const label =
-        `${days > 0 ? `${days}d ` : ""}${hours > 0 ? `${hours}h` : ""}`.trim();
+      const parts = [];
+      if (days > 0)    parts.push(`${days}d`);
+      if (hours > 0)   parts.push(`${hours}h`);
+      if (minutes > 0) parts.push(`${minutes}м`);
+      const label = parts.join(" ");
 
       return interaction.editReply({
         embeds: [
@@ -1448,10 +1650,10 @@ client.on("interactionCreate", async (interaction) => {
             .setTitle("⏰  Compensation Applied")
             .setDescription(`Added **+${label}** to **${count}** active subscriber(s).`)
             .addFields(
-              { name: "⏱️ Time Added",      value: `\`+${label}\``, inline: true },
-              { name: "👥 Users Updated",   value: `\`${count}\``,  inline: true },
-              { name: "📬 DMs Sent",        value: `\`${dmsOk}\``,  inline: true },
-              { name: "🛠️ Executed By",     value: `<@${interaction.user.id}>`, inline: false }
+              { name: "⏱️ Time Added",    value: `\`+${label}\``, inline: true },
+              { name: "👥 Users Updated", value: `\`${count}\``,  inline: true },
+              { name: "📬 DMs Sent",      value: `\`${dmsOk}\``,  inline: true },
+              { name: "🛠️ Executed By",   value: `<@${interaction.user.id}>`, inline: false }
             )
             .setColor(SUCCESS_COLOR)
             .setFooter({ text: FOOTER_TEXT })
@@ -1498,7 +1700,6 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       const storageId = resolveStorageId(productId, tierDays);
-
       let keys = [];
 
       if (keysText) {
@@ -1825,7 +2026,6 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     // ── Buy product buttons ──
-    // customId format: buy_<productId>_<days>
     if (interaction.customId.startsWith("buy_")) {
       console.log(`🛒 Purchase initiated by ${interaction.user.tag}: ${interaction.customId}`);
       await interaction.deferReply({ flags: 64 });
@@ -1900,10 +2100,7 @@ client.on("interactionCreate", async (interaction) => {
             });
           }
 
-          // Add/extend subscription in DB
           await addSubscription(interaction.user.id, days);
-
-          // Give Access role
           await giveNotifierRole(interaction.user.id, interaction.guild);
 
           const newBalance = await getBalance(interaction.user.id);
@@ -1940,7 +2137,6 @@ client.on("interactionCreate", async (interaction) => {
             ]
           });
 
-          // DM confirmation
           try {
             await interaction.user.send({
               embeds: [
@@ -2194,12 +2390,10 @@ client.on("interactionCreate", async (interaction) => {
       const product   = PRODUCTS[productId];
 
       if (product.isAccess) {
-        // Notifier — show tier buttons with day options
         const tierInfo = product.tiers.map(t =>
           `**${t.days} day${t.days > 1 ? "s" : ""}** — **$${t.price}**  🔔 Grants **${ROLE_NOTIFIER_ACCESS}** role`
         );
 
-        // Check if user already has a sub
         const existingSub = await getSubscription(interaction.user.id);
         const subNote = existingSub
           ? `\n\n> ℹ️ You currently have **${formatDuration(new Date(existingSub.expires_at) - new Date())}** remaining. Purchasing again will **extend** your access.`
@@ -2223,7 +2417,6 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Auto Joiner — key-based
       const tierInfo = await Promise.all(
         product.tiers.map(async t => {
           const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
