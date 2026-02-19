@@ -33,8 +33,9 @@ const OWNER_ID            = process.env.OWNER_ID;
 const GUILD_ID            = process.env.GUILD_ID;
 
 // ===== ROLE NAMES =====
-const ROLE_ACCESS      = "Pay Access";
-const ROLE_ACCESS_PLUS = "Pay Access+";
+const ROLE_ACCESS           = "Pay Access";
+const ROLE_ACCESS_PLUS      = "Pay Access+";
+const ROLE_NOTIFIER_ACCESS  = "Access"; // Role given to Notifier buyers
 
 // ===== (ОПЦИОНАЛЬНО) ROLE IDs =====
 const USE_ROLE_IDS        = false;
@@ -80,6 +81,47 @@ const SLASH_COMMANDS = [
     default_member_permissions: "0"
   },
   {
+    name: "userlist",
+    description: "📋 [Pay Access] Show all users with active Notifier access and time remaining",
+    dm_permission: false
+  },
+  {
+    name: "ban",
+    description: "🔨 [Pay Access] Remove Notifier Access role from a user immediately",
+    dm_permission: false,
+    options: [
+      {
+        name: "user",
+        description: "The user to revoke access from",
+        type: ApplicationCommandOptionType.User,
+        required: true
+      }
+    ]
+  },
+  {
+    name: "compensate",
+    description: "⏰ [Pay Access] Add extra time to ALL active Notifier subscribers",
+    dm_permission: false,
+    options: [
+      {
+        name: "days",
+        description: "Days to add (0 or more)",
+        type: ApplicationCommandOptionType.Integer,
+        required: true,
+        min_value: 0,
+        max_value: 365
+      },
+      {
+        name: "hours",
+        description: "Hours to add (0 or more)",
+        type: ApplicationCommandOptionType.Integer,
+        required: false,
+        min_value: 0,
+        max_value: 23
+      }
+    ]
+  },
+  {
     name: "forceadd",
     description: "🔧 [Pay Access] Manually add balance to a user",
     dm_permission: false,
@@ -111,8 +153,7 @@ const SLASH_COMMANDS = [
         type: ApplicationCommandOptionType.String,
         required: true,
         choices: [
-          { name: "Auto Joiner", value: "auto_joiner" },
-          { name: "Notifier",    value: "notifier" }
+          { name: "Auto Joiner", value: "auto_joiner" }
         ]
       },
       {
@@ -151,8 +192,7 @@ const SLASH_COMMANDS = [
         type: ApplicationCommandOptionType.String,
         required: true,
         choices: [
-          { name: "Auto Joiner", value: "auto_joiner" },
-          { name: "Notifier",    value: "notifier" }
+          { name: "Auto Joiner", value: "auto_joiner" }
         ]
       },
       {
@@ -207,6 +247,11 @@ client.once("ready", async () => {
     activities: [{ name: "💳 /pay  |  /buy  |  /balance", type: 0 }],
     status: "online"
   });
+
+  // Start subscription expiry check loop (every 5 minutes)
+  setInterval(checkExpiredSubscriptions, 5 * 60 * 1000);
+  // Run immediately on startup
+  checkExpiredSubscriptions();
 });
 
 // ===== ROLE HELPERS =====
@@ -280,6 +325,243 @@ async function getAccessPlusUsers() {
   }
 
   return users;
+}
+
+// ===== NOTIFIER ACCESS ROLE HELPERS =====
+
+/**
+ * Find the "Access" role in the primary guild.
+ */
+async function getNotifierAccessRole() {
+  const guildId = GUILD_ID;
+  if (!guildId) {
+    console.warn("⚠️ GUILD_ID not set — cannot manage Access role");
+    return null;
+  }
+
+  let guild;
+  try {
+    guild = await client.guilds.fetch(guildId);
+  } catch (e) {
+    console.error("❌ Could not fetch guild:", e.message);
+    return null;
+  }
+
+  const role = guild.roles.cache.find(
+    r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_NOTIFIER_ACCESS)
+  );
+
+  if (!role) {
+    console.warn(`⚠️ Role "${ROLE_NOTIFIER_ACCESS}" not found in guild "${guild.name}"`);
+  }
+
+  return { guild, role };
+}
+
+/**
+ * Give the "Access" role to a user.
+ */
+async function giveNotifierRole(userId) {
+  const { guild, role } = await getNotifierAccessRole();
+  if (!guild || !role) return false;
+
+  try {
+    const member = await guild.members.fetch({ user: userId, force: true });
+    await member.roles.add(role);
+    console.log(`✅ Gave "${ROLE_NOTIFIER_ACCESS}" role to ${userId}`);
+    return true;
+  } catch (e) {
+    console.error(`❌ Could not give role to ${userId}:`, e.message);
+    return false;
+  }
+}
+
+/**
+ * Remove the "Access" role from a user.
+ */
+async function removeNotifierRole(userId) {
+  const { guild, role } = await getNotifierAccessRole();
+  if (!guild || !role) return false;
+
+  try {
+    const member = await guild.members.fetch({ user: userId, force: true });
+    if (member.roles.cache.has(role.id)) {
+      await member.roles.remove(role);
+      console.log(`✅ Removed "${ROLE_NOTIFIER_ACCESS}" role from ${userId}`);
+    }
+    return true;
+  } catch (e) {
+    console.error(`❌ Could not remove role from ${userId}:`, e.message);
+    return false;
+  }
+}
+
+// ===== SUBSCRIPTION HELPERS =====
+
+/**
+ * Add or extend a Notifier subscription for a user.
+ * If user already has an active subscription, extends it by `days` days.
+ * Otherwise creates a new one starting from now.
+ *
+ * Supabase table: subscriptions
+ *   user_id    TEXT  (primary/unique)
+ *   expires_at TIMESTAMPTZ
+ *   created_at TIMESTAMPTZ (default now())
+ */
+async function addSubscription(userId, days) {
+  const userIdStr = userId.toString();
+
+  // Fetch existing subscription
+  const { data, error: selectError } = await supabase
+    .from("subscriptions")
+    .select("expires_at")
+    .eq("user_id", userIdStr)
+    .single();
+
+  let baseDate = new Date();
+
+  if (data) {
+    const existing = new Date(data.expires_at);
+    // Extend from current expiry if it's in the future
+    if (existing > baseDate) baseDate = existing;
+  } else if (selectError && selectError.code !== "PGRST116") {
+    console.error("❌ Subscription select error:", selectError.message);
+    return false;
+  }
+
+  const newExpiry = new Date(baseDate.getTime() + days * 24 * 60 * 60 * 1000);
+
+  if (data) {
+    const { error } = await supabase
+      .from("subscriptions")
+      .update({ expires_at: newExpiry.toISOString() })
+      .eq("user_id", userIdStr);
+    if (error) { console.error("❌ Subscription update error:", error.message); return false; }
+  } else {
+    const { error } = await supabase
+      .from("subscriptions")
+      .insert({ user_id: userIdStr, expires_at: newExpiry.toISOString() });
+    if (error) { console.error("❌ Subscription insert error:", error.message); return false; }
+  }
+
+  console.log(`✅ Subscription set for ${userIdStr} until ${newExpiry.toISOString()}`);
+  return true;
+}
+
+/**
+ * Get subscription info for a user.
+ * Returns { expires_at } or null if not found / expired.
+ */
+async function getSubscription(userId) {
+  const { data } = await supabase
+    .from("subscriptions")
+    .select("expires_at")
+    .eq("user_id", userId.toString())
+    .single();
+
+  if (!data) return null;
+  const expires = new Date(data.expires_at);
+  if (expires <= new Date()) return null; // expired
+  return { expires_at: expires };
+}
+
+/**
+ * Delete a subscription record from DB.
+ */
+async function removeSubscription(userId) {
+  const { error } = await supabase
+    .from("subscriptions")
+    .delete()
+    .eq("user_id", userId.toString());
+  if (error) console.error("❌ Subscription delete error:", error.message);
+  return !error;
+}
+
+/**
+ * Get ALL active subscriptions (expires_at > now).
+ */
+async function getAllActiveSubscriptions() {
+  const { data, error } = await supabase
+    .from("subscriptions")
+    .select("user_id, expires_at")
+    .gt("expires_at", new Date().toISOString())
+    .order("expires_at", { ascending: true });
+
+  if (error) {
+    console.error("❌ Error fetching subscriptions:", error.message);
+    return [];
+  }
+  return data || [];
+}
+
+/**
+ * Add extra time (ms) to ALL currently active subscriptions.
+ */
+async function addTimeToAllSubscriptions(ms) {
+  const subs = await getAllActiveSubscriptions();
+  if (subs.length === 0) return 0;
+
+  let updated = 0;
+  for (const sub of subs) {
+    const newExpiry = new Date(new Date(sub.expires_at).getTime() + ms);
+    const { error } = await supabase
+      .from("subscriptions")
+      .update({ expires_at: newExpiry.toISOString() })
+      .eq("user_id", sub.user_id);
+    if (!error) updated++;
+  }
+  console.log(`✅ Compensated ${updated} subscribers`);
+  return updated;
+}
+
+/**
+ * Periodic check: remove expired subscriptions and revoke roles.
+ */
+async function checkExpiredSubscriptions() {
+  console.log("🔍 Checking for expired Notifier subscriptions...");
+
+  const { data, error } = await supabase
+    .from("subscriptions")
+    .select("user_id, expires_at")
+    .lte("expires_at", new Date().toISOString());
+
+  if (error) {
+    console.error("❌ Error checking expired subscriptions:", error.message);
+    return;
+  }
+
+  if (!data || data.length === 0) {
+    console.log("✅ No expired subscriptions found.");
+    return;
+  }
+
+  for (const sub of data) {
+    console.log(`⏰ Subscription expired for user ${sub.user_id}`);
+    await removeNotifierRole(sub.user_id);
+    await removeSubscription(sub.user_id);
+
+    // Notify user
+    try {
+      const user = await client.users.fetch(sub.user_id);
+      await user.send({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("⏰  Notifier Access Expired")
+            .setDescription(
+              "Your **Notifier** subscription has expired and your **Access** role has been removed.\n\n" +
+              "Use `/buy` to renew your access!"
+            )
+            .setColor(ERROR_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
+    } catch {
+      console.log(`⚠️ Could not DM user ${sub.user_id} about expiry`);
+    }
+  }
+
+  console.log(`✅ Processed ${data.length} expired subscription(s).`);
 }
 
 // ===== BALANCE HELPERS =====
@@ -372,10 +654,6 @@ async function getBalance(userId) {
 }
 
 // ===== PAYMENT MESSAGE TRACKING =====
-/**
- * Stores payment_id -> { userId, messageId, channelId }
- * This allows us to edit the message when status changes
- */
 const paymentMessages = new Map();
 
 async function savePaymentMessage(paymentId, userId, messageId, channelId) {
@@ -389,18 +667,12 @@ async function getPaymentMessage(paymentId) {
 
 // ===== KEY HELPERS =====
 
-/**
- * Returns the storage product_id for a given product + optional days tier.
- * Auto Joiner keys are stored per-tier: "auto_joiner_1", "auto_joiner_2", "auto_joiner_3"
- * Other products keep their plain id.
- */
 function resolveStorageId(productId, days = null) {
   if (productId === "auto_joiner" && days) return `${productId}_${days}`;
   return productId;
 }
 
 async function getAvailableKeyCount(storageId) {
-  console.log(`🔍 Counting available keys for storageId: ${storageId}`);
   const { count, error } = await supabase
     .from("keys")
     .select("*", { count: "exact", head: true })
@@ -411,14 +683,10 @@ async function getAvailableKeyCount(storageId) {
     console.error("❌ Error counting keys:", error.message);
     return 0;
   }
-
-  console.log(`📊 Available keys: ${count || 0}`);
   return count || 0;
 }
 
 async function getRandomAvailableKey(storageId) {
-  console.log(`🔑 Getting random key for storageId: ${storageId}`);
-
   const { data, error } = await supabase
     .from("keys")
     .select("*")
@@ -426,22 +694,12 @@ async function getRandomAvailableKey(storageId) {
     .eq("is_used", false)
     .limit(1);
 
-  if (error) {
-    console.error("❌ Error fetching key:", error.message);
-    return null;
-  }
-
-  if (!data || data.length === 0) {
-    console.log("⚠️ No available keys found");
-    return null;
-  }
-
-  console.log(`✅ Found key: ${data[0].key_value.substring(0, 10)}...`);
+  if (error) { console.error("❌ Error fetching key:", error.message); return null; }
+  if (!data || data.length === 0) return null;
   return data[0];
 }
 
 async function markKeyAsUsed(keyId, userId) {
-  console.log(`🔒 Marking key ${keyId} as used by ${userId}`);
   const { error } = await supabase
     .from("keys")
     .update({
@@ -451,17 +709,11 @@ async function markKeyAsUsed(keyId, userId) {
     })
     .eq("id", keyId);
 
-  if (error) {
-    console.error("❌ Error marking key as used:", error.message);
-    return false;
-  }
-
-  console.log("✅ Key marked as used");
+  if (error) { console.error("❌ Error marking key as used:", error.message); return false; }
   return true;
 }
 
 async function addKeys(storageId, keys) {
-  console.log(`➕ Adding ${keys.length} keys for storageId: ${storageId}`);
   const keyRecords = keys.map(key => ({
     product_id: storageId,
     key_value:  key.trim(),
@@ -469,21 +721,11 @@ async function addKeys(storageId, keys) {
   }));
 
   const { error } = await supabase.from("keys").insert(keyRecords);
-
-  if (error) {
-    console.error("❌ Error adding keys:", error.message);
-    return false;
-  }
-
-  console.log("✅ Keys added successfully");
+  if (error) { console.error("❌ Error adding keys:", error.message); return false; }
   return true;
 }
 
-/**
- * Returns only AVAILABLE (not used) keys for the given storageId.
- */
 async function getAvailableProductKeys(storageId, page = 1, perPage = 10) {
-  console.log(`📋 Getting available keys for storageId: ${storageId}, page: ${page}`);
   const from = (page - 1) * perPage;
   const to   = from + perPage - 1;
 
@@ -495,28 +737,13 @@ async function getAvailableProductKeys(storageId, page = 1, perPage = 10) {
     .order("created_at", { ascending: false })
     .range(from, to);
 
-  if (error) {
-    console.error("❌ Error getting keys:", error.message);
-    return { keys: [], total: 0 };
-  }
-
-  console.log(`📊 Found ${count || 0} available keys, returning ${data?.length || 0} for this page`);
+  if (error) { console.error("❌ Error getting keys:", error.message); return { keys: [], total: 0 }; }
   return { keys: data || [], total: count || 0 };
 }
 
 async function deleteKey(keyId) {
-  console.log(`🗑️ Deleting key: ${keyId}`);
-  const { error } = await supabase
-    .from("keys")
-    .delete()
-    .eq("id", keyId);
-
-  if (error) {
-    console.error("❌ Error deleting key:", error.message);
-    return false;
-  }
-
-  console.log("✅ Key deleted");
+  const { error } = await supabase.from("keys").delete().eq("id", keyId);
+  if (error) { console.error("❌ Error deleting key:", error.message); return false; }
   return true;
 }
 
@@ -527,6 +754,7 @@ const PRODUCTS = {
     name:        "Auto Joiner",
     emoji:       "🤖",
     description: "Automatically join rich servers",
+    isAccess:    false,
     tiers: [
       { days: 1, price: 30, originalPrice: 60 },
       { days: 2, price: 50, originalPrice: 80 },
@@ -537,8 +765,13 @@ const PRODUCTS = {
     id:          "notifier",
     name:        "Notifier",
     emoji:       "🔔",
-    description: "Get brainrot logs",
-    comingSoon:  true
+    description: "Get access to the #no channel with real-time alerts",
+    isAccess:    true, // Role-based product — gives "Access" role
+    tiers: [
+      { days: 3,  price: 20 },
+      { days: 7,  price: 50 },
+      { days: 14, price: 80 }
+    ]
   }
 };
 
@@ -582,9 +815,22 @@ const NEUTRAL_COLOR = 0x99AAB5;
 const ADMIN_COLOR   = 0xE67E22;
 const PLUS_COLOR    = 0xA855F7;
 const FUNPAY_COLOR  = 0xFF6B35;
+const ACCESS_COLOR  = 0x00BCD4;
 
-// ✅ Updated footer branding
 const FOOTER_TEXT = "⚡ Nameless Paysystem";
+
+// ===== UTILITY =====
+function formatDuration(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const days    = Math.floor(totalSeconds / 86400);
+  const hours   = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const parts = [];
+  if (days)    parts.push(`${days}д`);
+  if (hours)   parts.push(`${hours}ч`);
+  if (minutes) parts.push(`${minutes}м`);
+  return parts.length > 0 ? parts.join(" ") : "< 1м";
+}
 
 // ===== EMBEDS =====
 function buildMainMenuEmbed() {
@@ -602,7 +848,7 @@ function buildMainMenuEmbed() {
       },
       {
         name:   "🔧  Staff",
-        value:  "`/forceadd` — Add balance to a user\n`/addkey` — Add product keys\n`/keylist` — Manage keys",
+        value:  "`/forceadd` — Add balance to a user\n`/addkey` — Add product keys\n`/keylist` — Manage keys\n`/userlist` — Active subscribers\n`/ban` — Revoke access\n`/compensate` — Add time to all",
         inline: true
       },
       {
@@ -615,8 +861,9 @@ function buildMainMenuEmbed() {
       {
         name:   "🔑  Access Roles",
         value:
-          `**${ROLE_ACCESS}** — Can use \`/forceadd\`, \`/addkey\`, \`/keylist\`\n` +
-          `**${ROLE_ACCESS_PLUS}** — All above + receives payment notifications`,
+          `**${ROLE_ACCESS}** — Can use staff commands\n` +
+          `**${ROLE_ACCESS_PLUS}** — All above + receives payment notifications\n` +
+          `**${ROLE_NOTIFIER_ACCESS}** — Given to Notifier subscribers`,
         inline: false
       }
     )
@@ -654,23 +901,26 @@ async function buildShopEmbed() {
     .setTimestamp();
 
   for (const [, product] of Object.entries(PRODUCTS)) {
-    if (product.comingSoon) {
+    if (product.isAccess) {
+      // Notifier — show day tiers with prices (no stock)
+      const tierInfo = product.tiers.map(t =>
+        `**${t.days} day${t.days > 1 ? "s" : ""}** — **$${t.price}**  🔔 Role access`
+      );
       embed.addFields({
         name:   `${product.emoji}  ${product.name}`,
-        value:  `${product.description}\n\`🔜 Coming Soon\``,
+        value:  `${product.description}\n${tierInfo.join("\n")}`,
         inline: false
       });
     } else {
-      // Show per-tier stock
       const tierInfo = await Promise.all(
         product.tiers.map(async t => {
           const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
+          const orig  = t.originalPrice ? ` ~~$${t.originalPrice}~~` : "";
           return (
-            `**${t.days} day${t.days > 1 ? "s" : ""}** — ~~$${t.originalPrice}~~ **$${t.price}** 🔥  📦 \`${stock}\` in stock`
+            `**${t.days} day${t.days > 1 ? "s" : ""}** —${orig} **$${t.price}** 🔥  📦 \`${stock}\` in stock`
           );
         })
       );
-
       embed.addFields({
         name:   `${product.emoji}  ${product.name}`,
         value:  `${product.description}\n${tierInfo.join("\n")}`,
@@ -739,8 +989,6 @@ function buildPaymentEmbed(payment, currency, status = "waiting") {
       { name: "💵  Amount",   value: `\`${payment.price_amount} USD\``,  inline: true },
       { name: "🪙  Currency", value: `\`${payment.pay_currency}\``, inline: true }
     );
-  } else if (status === "finished") {
-    // Will be updated with balance info in webhook handler
   }
 
   return embed;
@@ -849,7 +1097,7 @@ function buildProductMenu() {
   const options = Object.entries(PRODUCTS).map(([id, product]) =>
     new StringSelectMenuOptionBuilder()
       .setLabel(product.name)
-      .setDescription(product.comingSoon ? "Coming Soon" : product.description)
+      .setDescription(product.description)
       .setValue(id)
       .setEmoji(product.emoji)
   );
@@ -864,7 +1112,7 @@ function buildProductMenu() {
 
 function buildTierButtons(productId) {
   const product = PRODUCTS[productId];
-  if (!product || product.comingSoon) return null;
+  if (!product) return null;
 
   const buttons = product.tiers.map(tier =>
     new ButtonBuilder()
@@ -887,10 +1135,6 @@ function buildAmountRow() {
   );
 }
 
-/**
- * Builds pagination + delete button row for /keylist.
- * storageId is the resolved storage id (e.g. "auto_joiner_1").
- */
 function buildKeyListButtons(page, totalPages, storageId) {
   const buttons = [];
 
@@ -992,6 +1236,206 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
+    // /userlist — show active Notifier subscribers
+    if (commandName === "userlist") {
+      await interaction.deferReply({ ephemeral: true });
+
+      const accessTier = await getAccessTier(interaction.user.id);
+      if (!accessTier) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const subs = await getAllActiveSubscriptions();
+
+      if (subs.length === 0) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("📋  Active Notifier Subscribers")
+              .setDescription("No active subscribers found.")
+              .setColor(NEUTRAL_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const now = new Date();
+      const lines = subs.map((sub, i) => {
+        const expires   = new Date(sub.expires_at);
+        const remaining = expires - now;
+        const timeLeft  = formatDuration(remaining);
+        const unixTs    = Math.floor(expires.getTime() / 1000);
+        return `**${i + 1}.** <@${sub.user_id}> — ⏱️ \`${timeLeft}\` remaining (<t:${unixTs}:R>)`;
+      });
+
+      // Split into chunks of 20 if needed
+      const chunks = [];
+      for (let i = 0; i < lines.length; i += 20) {
+        chunks.push(lines.slice(i, i + 20).join("\n"));
+      }
+
+      const embeds = chunks.map((chunk, idx) =>
+        new EmbedBuilder()
+          .setTitle(idx === 0 ? `📋  Active Notifier Subscribers (${subs.length})` : "📋  (continued)")
+          .setDescription(chunk)
+          .setColor(ACCESS_COLOR)
+          .setFooter({ text: FOOTER_TEXT })
+          .setTimestamp()
+      );
+
+      return interaction.editReply({ embeds });
+    }
+
+    // /ban — revoke Notifier access from a user
+    if (commandName === "ban") {
+      await interaction.deferReply({ ephemeral: true });
+
+      const accessTier = await getAccessTier(interaction.user.id);
+      if (!accessTier) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const targetUser = interaction.options.getUser("user");
+
+      const sub = await getSubscription(targetUser.id);
+
+      await removeNotifierRole(targetUser.id);
+      await removeSubscription(targetUser.id);
+
+      // DM the banned user
+      try {
+        await targetUser.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🔨  Access Revoked")
+              .setDescription("Your **Notifier** access has been revoked by an administrator.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      } catch {
+        console.log(`⚠️ Could not DM ${targetUser.tag} about revocation`);
+      }
+
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("🔨  Access Revoked")
+            .setDescription(
+              sub
+                ? `Revoked access from <@${targetUser.id}> — they had \`${formatDuration(new Date(sub.expires_at) - new Date())}\` remaining.`
+                : `Revoked access from <@${targetUser.id}>. (No active subscription was found in DB.)`
+            )
+            .addFields(
+              { name: "👤 User",    value: `<@${targetUser.id}> (\`${targetUser.tag}\`)`, inline: true },
+              { name: "🛠️ By",     value: `<@${interaction.user.id}>`,                  inline: true }
+            )
+            .setColor(ERROR_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
+    }
+
+    // /compensate — add time to all active subscribers
+    if (commandName === "compensate") {
+      await interaction.deferReply({ ephemeral: true });
+
+      const accessTier = await getAccessTier(interaction.user.id);
+      if (!accessTier) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const days  = interaction.options.getInteger("days")  || 0;
+      const hours = interaction.options.getInteger("hours") || 0;
+
+      if (days === 0 && hours === 0) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Invalid Input")
+              .setDescription("Please specify at least 1 day or 1 hour to compensate.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const totalMs    = (days * 24 * 60 * 60 + hours * 60 * 60) * 1000;
+      const subsBefore = await getAllActiveSubscriptions();
+      const count      = await addTimeToAllSubscriptions(totalMs);
+
+      // Notify each subscriber
+      let dmsOk = 0;
+      for (const sub of subsBefore) {
+        try {
+          const user = await client.users.fetch(sub.user_id);
+          await user.send({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("🎁  Time Compensation!")
+                .setDescription(
+                  `An administrator has added **${days > 0 ? `${days} day${days > 1 ? "s" : ""}` : ""}` +
+                  `${days > 0 && hours > 0 ? " and " : ""}` +
+                  `${hours > 0 ? `${hours} hour${hours > 1 ? "s" : ""}` : ""}** to your Notifier subscription!`
+                )
+                .setColor(SUCCESS_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+                .setTimestamp()
+            ]
+          });
+          dmsOk++;
+        } catch {
+          console.log(`⚠️ Could not DM ${sub.user_id} about compensation`);
+        }
+      }
+
+      const label =
+        `${days > 0 ? `${days}d ` : ""}${hours > 0 ? `${hours}h` : ""}`.trim();
+
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("⏰  Compensation Applied")
+            .setDescription(`Added **+${label}** to **${count}** active subscriber(s).`)
+            .addFields(
+              { name: "⏱️ Time Added",      value: `\`+${label}\``, inline: true },
+              { name: "👥 Users Updated",   value: `\`${count}\``,  inline: true },
+              { name: "📬 DMs Sent",        value: `\`${dmsOk}\``,  inline: true },
+              { name: "🛠️ Executed By",     value: `<@${interaction.user.id}>`, inline: false }
+            )
+            .setColor(SUCCESS_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
+    }
+
     // /addkey
     if (commandName === "addkey") {
       await interaction.deferReply({ ephemeral: true });
@@ -1014,7 +1458,6 @@ client.on("interactionCreate", async (interaction) => {
       const keysText   = interaction.options.getString("keys");
       const file       = interaction.options.getAttachment("file");
 
-      // Auto Joiner requires a tier selection
       if (productId === "auto_joiner" && !tierDays) {
         return interaction.editReply({
           embeds: [
@@ -1038,10 +1481,10 @@ client.on("interactionCreate", async (interaction) => {
         keys = keysText.split(/[\s\n]+/).filter(k => k.trim().length > 0);
       } else if (file) {
         try {
-          const response  = await axios.get(file.url);
+          const response    = await axios.get(file.url);
           const fileContent = response.data;
           keys = fileContent.split(/[\s\n]+/).filter(k => k.trim().length > 0);
-        } catch (err) {
+        } catch {
           return interaction.editReply({
             embeds: [
               new EmbedBuilder()
@@ -1132,7 +1575,6 @@ client.on("interactionCreate", async (interaction) => {
       const page      = interaction.options.getInteger("page") || 1;
       const perPage   = 10;
 
-      // Auto Joiner requires a tier selection
       if (productId === "auto_joiner" && !tierDays) {
         return interaction.editReply({
           embeds: [
@@ -1149,7 +1591,6 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       const storageId = resolveStorageId(productId, tierDays);
-
       return sendKeyListEmbed(interaction, storageId, productId, tierDays, page, perPage);
     }
 
@@ -1420,7 +1861,93 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
-        // Use tier-specific storage id for Auto Joiner
+        // ── NOTIFIER: role-based purchase ──
+        if (product.isAccess) {
+          const deducted = await deductBalance(interaction.user.id, tier.price);
+          if (!deducted) {
+            return interaction.editReply({
+              embeds: [
+                new EmbedBuilder()
+                  .setTitle("❌  Payment Failed")
+                  .setDescription("Could not process payment. Please try again.")
+                  .setColor(ERROR_COLOR)
+                  .setFooter({ text: FOOTER_TEXT })
+              ]
+            });
+          }
+
+          // Add/extend subscription in DB
+          await addSubscription(interaction.user.id, days);
+
+          // Give Access role
+          await giveNotifierRole(interaction.user.id);
+
+          const newBalance = await getBalance(interaction.user.id);
+          const sub        = await supabase
+            .from("subscriptions")
+            .select("expires_at")
+            .eq("user_id", interaction.user.id.toString())
+            .single();
+
+          const expiresAt  = sub.data ? new Date(sub.data.expires_at) : null;
+          const unixExpiry = expiresAt ? Math.floor(expiresAt.getTime() / 1000) : null;
+
+          await interaction.editReply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("✅  Notifier Access Granted!")
+                .setDescription(
+                  `You now have access to the **#no** channel!\n` +
+                  `The **${ROLE_NOTIFIER_ACCESS}** role has been given to you.`
+                )
+                .addFields(
+                  { name: "📅 Duration",    value: `\`${days} day${days > 1 ? "s" : ""}\``,                 inline: true },
+                  { name: "💵 Price",       value: `\`$${tier.price}\``,                                     inline: true },
+                  { name: "💰 New Balance", value: `\`$${newBalance.toFixed(2)}\``,                          inline: true },
+                  {
+                    name:  "⏰ Access Until",
+                    value: unixExpiry ? `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)` : "Unknown",
+                    inline: false
+                  }
+                )
+                .setColor(ACCESS_COLOR)
+                .setFooter({ text: "Your role has been assigned • " + FOOTER_TEXT })
+                .setTimestamp()
+            ]
+          });
+
+          // DM confirmation
+          try {
+            await interaction.user.send({
+              embeds: [
+                new EmbedBuilder()
+                  .setTitle("🔔  Notifier Access Confirmation")
+                  .setDescription(
+                    `You've purchased **${product.name}** — **${days} day${days > 1 ? "s" : ""}** access to **#no**!\n\n` +
+                    `Your **${ROLE_NOTIFIER_ACCESS}** role is now active.`
+                  )
+                  .addFields(
+                    { name: "📅 Duration",  value: `\`${days} day${days > 1 ? "s" : ""}\``, inline: true },
+                    { name: "💵 Price",     value: `\`$${tier.price}\``,                     inline: true },
+                    {
+                      name:  "⏰ Expires",
+                      value: unixExpiry ? `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)` : "Unknown",
+                      inline: false
+                    }
+                  )
+                  .setColor(ACCESS_COLOR)
+                  .setFooter({ text: FOOTER_TEXT })
+                  .setTimestamp()
+              ]
+            });
+          } catch {
+            console.log(`⚠️ Could not DM ${interaction.user.tag} about Notifier purchase`);
+          }
+
+          return;
+        }
+
+        // ── AUTO JOINER: key-based purchase ──
         const storageId = resolveStorageId(productId, days);
         const key = await getRandomAvailableKey(storageId);
 
@@ -1456,8 +1983,6 @@ client.on("interactionCreate", async (interaction) => {
         const newBalance = await getBalance(interaction.user.id);
         const stock      = await getAvailableKeyCount(storageId);
 
-        console.log(`✅ Purchase successful! New balance: ${newBalance}, Remaining stock: ${stock}`);
-
         await interaction.editReply({
           embeds: [
             new EmbedBuilder()
@@ -1475,20 +2000,20 @@ client.on("interactionCreate", async (interaction) => {
         });
 
         try {
-          // Create text file with the key
-          const keyFileContent = `${product.name} License Key\n` +
-                                `========================\n\n` +
-                                `Product: ${product.name}\n` +
-                                `Duration: ${tier.days} day${tier.days > 1 ? "s" : ""}\n` +
-                                `Price: $${tier.price}\n` +
-                                `Purchase Date: ${new Date().toISOString()}\n\n` +
-                                `License Key:\n${key.key_value}\n\n` +
-                                `========================\n` +
-                                `Keep this key safe and secure.\n`;
-          
+          const keyFileContent =
+            `${product.name} License Key\n` +
+            `========================\n\n` +
+            `Product: ${product.name}\n` +
+            `Duration: ${tier.days} day${tier.days > 1 ? "s" : ""}\n` +
+            `Price: $${tier.price}\n` +
+            `Purchase Date: ${new Date().toISOString()}\n\n` +
+            `License Key:\n${key.key_value}\n\n` +
+            `========================\n` +
+            `Keep this key safe and secure.\n`;
+
           const keyAttachment = new AttachmentBuilder(
-            Buffer.from(keyFileContent, 'utf-8'),
-            { name: `${product.name.replace(/\s+/g, '_')}_Key_${Date.now()}.txt` }
+            Buffer.from(keyFileContent, "utf-8"),
+            { name: `${product.name.replace(/\s+/g, "_")}_Key_${Date.now()}.txt` }
           );
 
           await interaction.user.send({
@@ -1497,9 +2022,9 @@ client.on("interactionCreate", async (interaction) => {
                 .setTitle(`🔑  ${product.name} Key`)
                 .setDescription(`Your **${tier.days} day${tier.days > 1 ? "s" : ""}** license key:`)
                 .addFields(
-                  { name: "🔐 License Key", value: `\`${key.key_value}\``, inline: false },
-                  { name: "⏱️ Duration",    value: `\`${tier.days} day${tier.days > 1 ? "s" : ""}\``, inline: true },
-                  { name: "💵 Price",       value: `\`$${tier.price}\``,                               inline: true }
+                  { name: "🔐 License Key", value: `\`${key.key_value}\``,                            inline: false },
+                  { name: "⏱️ Duration",    value: `\`${tier.days} day${tier.days > 1 ? "s" : ""}\``, inline: true  },
+                  { name: "💵 Price",       value: `\`$${tier.price}\``,                               inline: true  }
                 )
                 .setColor(SUCCESS_COLOR)
                 .setFooter({ text: FOOTER_TEXT })
@@ -1529,9 +2054,8 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     // ── Key list: delete button ──
-    // customId: keylist_delete_<storageId>_<page>
     if (interaction.customId.startsWith("keylist_delete_")) {
-      const withoutPrefix  = interaction.customId.slice("keylist_delete_".length); // "<storageId>_<page>"
+      const withoutPrefix  = interaction.customId.slice("keylist_delete_".length);
       const lastUnderscore = withoutPrefix.lastIndexOf("_");
       const storageId      = withoutPrefix.substring(0, lastUnderscore);
       const page           = withoutPrefix.substring(lastUnderscore + 1);
@@ -1560,9 +2084,9 @@ client.on("interactionCreate", async (interaction) => {
 
       let rest;
       if (isRefresh) {
-        rest = withoutPrefix.slice("refresh_".length); // "<storageId>_<page>"
+        rest = withoutPrefix.slice("refresh_".length);
       } else {
-        rest = withoutPrefix; // "<storageId>_<page>"
+        rest = withoutPrefix;
       }
 
       const lastUnderscore = rest.lastIndexOf("_");
@@ -1570,9 +2094,7 @@ client.on("interactionCreate", async (interaction) => {
       const page           = parseInt(rest.substring(lastUnderscore + 1));
       const perPage        = 10;
 
-      // Reconstruct productId and tierDays from storageId
       const { productId, tierDays } = parseStorageId(storageId);
-
       return sendKeyListEdit(interaction, storageId, productId, tierDays, page, perPage);
     }
 
@@ -1622,14 +2144,12 @@ client.on("interactionCreate", async (interaction) => {
       const method = interaction.values[0];
 
       if (method === "funpay") {
-        // Показываем информацию о FunPay реселлерах
         const backButton = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId("btn_buy")
             .setLabel("◀️ Back to Payment Methods")
             .setStyle(ButtonStyle.Secondary)
         );
-
         return interaction.update({
           embeds: [buildFunPayEmbed()],
           components: [backButton]
@@ -1637,7 +2157,6 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (method === "balance") {
-        // Показываем обычное меню продуктов
         const embed = await buildShopEmbed();
         return interaction.update({
           embeds: [embed],
@@ -1650,27 +2169,43 @@ client.on("interactionCreate", async (interaction) => {
       const productId = interaction.values[0];
       const product   = PRODUCTS[productId];
 
-      if (product.comingSoon) {
+      if (product.isAccess) {
+        // Notifier — show tier buttons with day options
+        const tierInfo = product.tiers.map(t =>
+          `**${t.days} day${t.days > 1 ? "s" : ""}** — **$${t.price}**  🔔 Grants **${ROLE_NOTIFIER_ACCESS}** role`
+        );
+
+        // Check if user already has a sub
+        const existingSub = await getSubscription(interaction.user.id);
+        const subNote = existingSub
+          ? `\n\n> ℹ️ You currently have **${formatDuration(new Date(existingSub.expires_at) - new Date())}** remaining. Purchasing again will **extend** your access.`
+          : "";
+
+        const embed = new EmbedBuilder()
+          .setTitle(`${product.emoji}  ${product.name}`)
+          .setDescription(
+            `${product.description}\n\n` +
+            `**💰 Pricing:**\n${tierInfo.join("\n")}` +
+            subNote
+          )
+          .setColor(ACCESS_COLOR)
+          .setFooter({ text: "Select a duration below to purchase • " + FOOTER_TEXT })
+          .setTimestamp();
+
+        const row = buildTierButtons(productId);
         return interaction.update({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle(`${product.emoji}  ${product.name}`)
-              .setDescription(
-                `${product.description}\n\n🔜 **Coming Soon**\n\nThis product is currently under development.`
-              )
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ],
-          components: []
+          embeds:     [embed],
+          components: row ? [row] : []
         });
       }
 
-      // Show per-tier stock for shop view
+      // Auto Joiner — key-based
       const tierInfo = await Promise.all(
         product.tiers.map(async t => {
           const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
+          const orig  = t.originalPrice ? ` ~~$${t.originalPrice}~~` : "";
           return (
-            `**${t.days} day${t.days > 1 ? "s" : ""}** — ~~$${t.originalPrice}~~ **$${t.price}** 🔥  📦 \`${stock}\` in stock`
+            `**${t.days} day${t.days > 1 ? "s" : ""}** —${orig} **$${t.price}** 🔥  📦 \`${stock}\` in stock`
           );
         })
       );
@@ -1686,7 +2221,6 @@ client.on("interactionCreate", async (interaction) => {
         .setTimestamp();
 
       const row = buildTierButtons(productId);
-
       return interaction.update({
         embeds:     [embed],
         components: row ? [row] : []
@@ -1712,7 +2246,6 @@ client.on("interactionCreate", async (interaction) => {
   // ──────────── MODAL SUBMITS ────────────
   if (interaction.isModalSubmit()) {
 
-    // Custom payment amount
     if (interaction.customId === "modal_custom_amount") {
       const userId  = interaction.user.id;
       const pending = pendingPayments.get(userId);
@@ -1751,8 +2284,6 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // Delete key by number
-    // customId: modal_delete_key_<storageId>_<page>
     if (interaction.customId.startsWith("modal_delete_key_")) {
       await interaction.deferReply({ ephemeral: true });
 
@@ -1777,10 +2308,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Fetch all available keys to find by global index
-      // The key number shown is (page-1)*perPage + local_index + 1
-      // So find which page / offset the key is on
-      const globalOffset = keyNumber - 1; // 0-based
+      const globalOffset = keyNumber - 1;
       const targetPage   = Math.floor(globalOffset / perPage) + 1;
       const localIndex   = globalOffset % perPage;
 
@@ -1824,9 +2352,9 @@ client.on("interactionCreate", async (interaction) => {
             .setTitle("🗑️  Key Deleted")
             .setDescription(`Key **#${keyNumber}** has been permanently removed from **${product.name}${tierLabel}**.`)
             .addFields(
-              { name: "🔑 Deleted Key",  value: `\`${keyRecord.key_value.substring(0, 30)}...\``, inline: false },
-              { name: "📦 Remaining Stock", value: `\`${newStock}\` keys available`,               inline: true },
-              { name: "🛠️ Deleted By",   value: `<@${interaction.user.id}>`,                      inline: true }
+              { name: "🔑 Deleted Key",      value: `\`${keyRecord.key_value.substring(0, 30)}...\``, inline: false },
+              { name: "📦 Remaining Stock",  value: `\`${newStock}\` keys available`,                inline: true  },
+              { name: "🛠️ Deleted By",       value: `<@${interaction.user.id}>`,                    inline: true  }
             )
             .setColor(ERROR_COLOR)
             .setFooter({ text: FOOTER_TEXT })
@@ -1840,11 +2368,6 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // ===== PARSE STORAGE ID =====
-/**
- * Reverse of resolveStorageId.
- * "auto_joiner_1" → { productId: "auto_joiner", tierDays: 1 }
- * "notifier"      → { productId: "notifier",    tierDays: null }
- */
 function parseStorageId(storageId) {
   const match = storageId.match(/^(.+?)_(\d+)$/);
   if (match && PRODUCTS[match[1]]) {
@@ -1945,12 +2468,11 @@ async function processPayment(interaction, userId, amount, currency) {
     const embed   = buildPaymentEmbed(payment, currency, "waiting");
 
     try {
-      const user = await client.users.fetch(userId);
+      const user      = await client.users.fetch(userId);
       const dmMessage = await user.send({ embeds: [embed] });
-      
-      // Save payment message ID for later updates
+
       await savePaymentMessage(payment.payment_id, userId, dmMessage.id, dmMessage.channel.id);
-      
+
       await interaction.editReply({
         embeds: [
           new EmbedBuilder()
@@ -2019,14 +2541,12 @@ app.post("/webhook", async (req, res) => {
     const cfg = STATUS_CONFIG[status];
     if (!cfg) return res.sendStatus(200);
 
-    // Get saved payment message info
     const msgInfo = await getPaymentMessage(payment_id);
-    
-    // Handle finished payment - add balance and send notifications
+
     if (status === "finished") {
       const success    = await addBalance(userId, amount);
       const newBalance = await getBalance(userId);
-      
+
       const embed = new EmbedBuilder()
         .setTitle(`${cfg.icon}  ${cfg.title}`)
         .setDescription(cfg.desc)
@@ -2045,32 +2565,23 @@ app.post("/webhook", async (req, res) => {
              .setDescription("Payment received but balance update failed. Contact support.");
       }
 
-      // Try to edit existing message if available
       if (msgInfo) {
         try {
-          const user = await client.users.fetch(msgInfo.userId);
+          const user    = await client.users.fetch(msgInfo.userId);
           const channel = await user.createDM();
           const message = await channel.messages.fetch(msgInfo.messageId);
           await message.edit({ embeds: [embed] });
           console.log(`✅ Updated payment message for ${payment_id}`);
         } catch (editErr) {
           console.error(`❌ Could not edit message for payment ${payment_id}:`, editErr.message);
-          // Fallback: send new message
           const payerUser = await client.users.fetch(userId).catch(() => null);
-          if (payerUser) {
-            await payerUser.send({ embeds: [embed] }).catch(() => {});
-          }
+          if (payerUser) await payerUser.send({ embeds: [embed] }).catch(() => {});
         }
       } else {
-        // No saved message, send new one
-        console.log(`⚠️ No saved message for payment ${payment_id}, sending new message`);
         const payerUser = await client.users.fetch(userId).catch(() => null);
-        if (payerUser) {
-          await payerUser.send({ embeds: [embed] }).catch(() => {});
-        }
+        if (payerUser) await payerUser.send({ embeds: [embed] }).catch(() => {});
       }
 
-      // ALWAYS send Pay Access+ notifications on successful payment
       if (success) {
         const payerUser = await client.users.fetch(userId).catch(() => null);
         if (payerUser) {
@@ -2083,19 +2594,15 @@ app.post("/webhook", async (req, res) => {
             try {
               await user.send({ embeds: [notifyEmbed] });
               notified++;
-              console.log(`✅ Notified Pay Access+ user ${user.tag}`);
             } catch (err) {
               console.log(`⚠️ Could not DM Pay Access+ user ${user.tag}:`, err.message);
             }
           }
           console.log(`📣 Notified ${notified} Pay Access+ member(s) about payment by ${payerUser.tag}`);
-        } else {
-          console.error(`⚠️ Could not fetch payer user ${userId} for notifications`);
         }
       }
 
     } else if (["confirming", "confirmed", "failed", "expired"].includes(status)) {
-      // Handle other statuses - just update the message
       const embed = new EmbedBuilder()
         .setTitle(`${cfg.icon}  ${cfg.title}`)
         .setDescription(cfg.desc)
@@ -2112,19 +2619,17 @@ app.post("/webhook", async (req, res) => {
 
       if (msgInfo) {
         try {
-          const user = await client.users.fetch(msgInfo.userId);
+          const user    = await client.users.fetch(msgInfo.userId);
           const channel = await user.createDM();
           const message = await channel.messages.fetch(msgInfo.messageId);
           await message.edit({ embeds: [embed] });
           console.log(`✅ Updated payment message for ${payment_id} (status: ${status})`);
         } catch (editErr) {
           console.error(`❌ Could not edit message for payment ${payment_id}:`, editErr.message);
-          // Fallback: send new message
           const user = await client.users.fetch(userId).catch(() => null);
           if (user) await user.send({ embeds: [embed] }).catch(() => {});
         }
       } else {
-        // No saved message, send new one
         const user = await client.users.fetch(userId).catch(() => null);
         if (user) await user.send({ embeds: [embed] }).catch(() => {});
       }
