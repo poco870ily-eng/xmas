@@ -30,7 +30,7 @@ const PORT                = process.env.PORT || 3000;
 const SUPABASE_URL        = process.env.SUPABASE_URL;
 const SUPABASE_KEY        = process.env.SUPABASE_KEY;
 const OWNER_ID            = process.env.OWNER_ID;
-const GUILD_ID            = process.env.GUILD_ID;
+// GUILD_ID удалён — команды регистрируются для всех серверов динамически
 
 // ===== ROLE NAMES =====
 const ROLE_ACCESS           = "Pay Access";
@@ -266,8 +266,7 @@ const SLASH_COMMANDS = [
   }
 ];
 
-// ===== REGISTER COMMANDS ON READY =====
-// ===== GLOBAL ERROR HANDLER (prevents crashes from unhandled Discord errors) =====
+// ===== GLOBAL ERROR HANDLER =====
 client.on("error", (err) => {
   console.error("❌ Discord client error:", err.message);
 });
@@ -276,44 +275,43 @@ process.on("unhandledRejection", (err) => {
   console.error("❌ Unhandled rejection:", err?.message || err);
 });
 
+// ===== HELPER: регистрация команд для одного сервера =====
+async function registerCommandsForGuild(guildId) {
+  const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
+  try {
+    await rest.put(
+      Routes.applicationGuildCommands(CLIENT_ID, guildId),
+      { body: SLASH_COMMANDS }
+    );
+    console.log(`✅ Команды зарегистрированы для сервера ${guildId}`);
+  } catch (err) {
+    console.warn(`⚠️ Не удалось зарегистрировать команды для ${guildId}: ${err.message}`);
+  }
+}
+
+// ===== REGISTER COMMANDS ON READY =====
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
+  console.log(`📡 Бот находится на ${client.guilds.cache.size} сервере(ах)`);
 
-  const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
-
-  try {
-    console.log("🔄 Registering slash commands...");
-
-    if (GUILD_ID) {
-      try {
-        await rest.put(
-          Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-          { body: SLASH_COMMANDS }
-        );
-        console.log(`✅ Slash commands registered for guild ${GUILD_ID}!`);
-      } catch (guildErr) {
-        console.warn(`⚠️ Guild command registration failed (Missing Access?), falling back to global. Error: ${guildErr.message}`);
-        console.warn("ℹ️ To fix: re-invite the bot with the 'applications.commands' OAuth2 scope.");
-        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: SLASH_COMMANDS });
-        console.log("✅ Slash commands registered globally (fallback)!");
-      }
-    } else {
-      await rest.put(Routes.applicationCommands(CLIENT_ID), { body: SLASH_COMMANDS });
-      console.log("✅ Slash commands registered globally!");
-    }
-  } catch (err) {
-    console.error("❌ Failed to register slash commands:", err.message);
-  }
+  // Регистрируем команды для каждого сервера, где уже есть бот
+  const guildIds = [...client.guilds.cache.keys()];
+  await Promise.all(guildIds.map(id => registerCommandsForGuild(id)));
 
   client.user.setPresence({
     activities: [{ name: "💳 /pay  |  /buy  |  /balance", type: 0 }],
     status: "online"
   });
 
-  // Start subscription expiry check loop (every 5 minutes)
+  // Запуск проверки истёкших подписок (каждые 5 минут)
   setInterval(checkExpiredSubscriptions, 5 * 60 * 1000);
-  // Run immediately on startup
   checkExpiredSubscriptions();
+});
+
+// ===== REGISTER COMMANDS WHEN JOINING A NEW GUILD =====
+client.on("guildCreate", async (guild) => {
+  console.log(`➕ Бот добавлен на новый сервер: "${guild.name}" (${guild.id})`);
+  await registerCommandsForGuild(guild.id);
 });
 
 // ===== ROLE HELPERS =====
@@ -491,9 +489,6 @@ async function addSubscription(userId, days) {
   return true;
 }
 
-/**
- * Add time in milliseconds to a specific user's subscription
- */
 async function addTimeToUserSubscription(userId, ms) {
   const userIdStr = userId.toString();
 
@@ -1022,7 +1017,7 @@ function buildFunPayEmbed() {
 function buildPaymentEmbed(payment, currency, status = "waiting") {
   const cur = CURRENCIES[currency] || { emoji: "🪙", name: currency, color: BRAND_COLOR };
   const cfg = STATUS_CONFIG[status];
-  
+
   const embed = new EmbedBuilder()
     .setTitle(`${cfg.icon}  ${cfg.title} — ${cur.emoji} ${cur.name}`)
     .setDescription(cfg.desc)
@@ -1344,7 +1339,7 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // /userlist — show active Notifier subscribers
+    // /userlist
     if (commandName === "userlist") {
       await interaction.deferReply({ flags: 64 });
 
@@ -1401,7 +1396,7 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.editReply({ embeds });
     }
 
-    // /ban — revoke Notifier access from a user
+    // /ban
     if (commandName === "ban") {
       await interaction.deferReply({ flags: 64 });
 
@@ -1459,7 +1454,7 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // /addtime — add time to a specific user
+    // /addtime
     if (commandName === "addtime") {
       await interaction.deferReply({ flags: 64 });
 
@@ -1572,7 +1567,7 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // /compensate — add time to all active subscribers
+    // /compensate
     if (commandName === "compensate") {
       await interaction.deferReply({ flags: 64 });
 
@@ -1613,7 +1608,7 @@ client.on("interactionCreate", async (interaction) => {
       for (const sub of subsBefore) {
         try {
           const user = await client.users.fetch(sub.user_id);
-          
+
           const parts = [];
           if (days > 0)    parts.push(`${days} day${days > 1 ? "s" : ""}`);
           if (hours > 0)   parts.push(`${hours} hour${hours > 1 ? "s" : ""}`);
