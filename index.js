@@ -332,68 +332,68 @@ async function getAccessPlusUsers() {
 /**
  * Find the "Access" role in the primary guild.
  */
-async function getNotifierAccessRole() {
-  const guildId = GUILD_ID;
-  if (!guildId) {
-    console.warn("⚠️ GUILD_ID not set — cannot manage Access role");
-    return { guild: null, role: null };
-  }
-
-  let guild;
-  try {
-    // Get from cache first (bot is already in the guild), fallback to fetch
-    guild = client.guilds.cache.get(guildId);
-    if (!guild) {
-      guild = await client.guilds.fetch(guildId);
-    }
-    // Force fetch all roles into cache
+/**
+ * Find the ROLE_NOTIFIER_ACCESS role in a guild object.
+ * Pass interaction.guild directly — no API fetch needed.
+ */
+async function findNotifierRole(guild) {
+  if (!guild) return null;
+  // Roles should already be cached on an interaction guild, but fetch just in case
+  if (guild.roles.cache.size <= 1) {
     await guild.roles.fetch();
-  } catch (e) {
-    console.error("❌ Could not fetch guild/roles:", e.message);
-    return { guild: null, role: null };
   }
-
-  console.log(`[DEBUG] Roles in guild "${guild.name}":`, guild.roles.cache.map(r => `"${r.name}"`).join(", "));
-
   const role = guild.roles.cache.find(
     r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_NOTIFIER_ACCESS)
   );
-
   if (!role) {
-    console.warn(`⚠️ Role "${ROLE_NOTIFIER_ACCESS}" not found. Available roles listed above.`);
+    console.warn(`⚠️ Role "${ROLE_NOTIFIER_ACCESS}" not found in "${guild.name}". Roles: ${guild.roles.cache.map(r => r.name).join(", ")}`);
   } else {
     console.log(`✅ Found role "${role.name}" (ID: ${role.id})`);
   }
-
-  return { guild, role };
+  return role || null;
 }
 
 /**
  * Give the "Access" role to a user.
+ * guild — pass interaction.guild from the interaction context.
  */
-async function giveNotifierRole(userId) {
-  const { guild, role } = await getNotifierAccessRole();
-  if (!guild || !role) {
-    console.error(`❌ giveNotifierRole failed: guild=${!!guild}, role=${!!role}`);
+async function giveNotifierRole(userId, guild) {
+  if (!guild) {
+    // Fallback: try all cached guilds
+    for (const [, g] of client.guilds.cache) {
+      const result = await giveNotifierRole(userId, g);
+      if (result) return true;
+    }
+    console.error(`❌ giveNotifierRole: no guild available for userId=${userId}`);
     return false;
   }
+  const role = await findNotifierRole(guild);
+  if (!role) return false;
   try {
     const member = await guild.members.fetch({ user: userId, force: true });
     await member.roles.add(role.id);
     console.log(`✅ Gave "${ROLE_NOTIFIER_ACCESS}" role (${role.id}) to ${userId}`);
     return true;
   } catch (e) {
-    console.error(`❌ Could not give role to ${userId}:`, e.message, e.stack);
+    console.error(`❌ Could not give role to ${userId}:`, e.message);
     return false;
   }
 }
 
-async function removeNotifierRole(userId) {
-  const { guild, role } = await getNotifierAccessRole();
-  if (!guild || !role) {
-    console.error(`❌ removeNotifierRole failed: guild=${!!guild}, role=${!!role}`);
-    return false;
+/**
+ * Remove the "Access" role from a user.
+ * guild — pass interaction.guild from the interaction context, or null for background tasks.
+ */
+async function removeNotifierRole(userId, guild) {
+  if (!guild) {
+    // Fallback: try all cached guilds
+    for (const [, g] of client.guilds.cache) {
+      await removeNotifierRole(userId, g);
+    }
+    return true;
   }
+  const role = await findNotifierRole(guild);
+  if (!role) return false;
   try {
     const member = await guild.members.fetch({ user: userId, force: true });
     if (member.roles.cache.has(role.id)) {
@@ -402,7 +402,7 @@ async function removeNotifierRole(userId) {
     }
     return true;
   } catch (e) {
-    console.error(`❌ Could not remove role from ${userId}:`, e.message, e.stack);
+    console.error(`❌ Could not remove role from ${userId}:`, e.message);
     return false;
   }
 }
@@ -1326,7 +1326,7 @@ client.on("interactionCreate", async (interaction) => {
 
       const sub = await getSubscription(targetUser.id);
 
-      await removeNotifierRole(targetUser.id);
+      await removeNotifierRole(targetUser.id, interaction.guild);
       await removeSubscription(targetUser.id);
 
       // DM the banned user
@@ -1891,7 +1891,7 @@ client.on("interactionCreate", async (interaction) => {
           await addSubscription(interaction.user.id, days);
 
           // Give Access role
-          await giveNotifierRole(interaction.user.id);
+          await giveNotifierRole(interaction.user.id, interaction.guild);
 
           const newBalance = await getBalance(interaction.user.id);
           const sub        = await supabase
