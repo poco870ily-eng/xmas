@@ -318,6 +318,86 @@ client.on("guildCreate", (guild) => {
   console.log(`➕ Бот добавлен на новый сервер: "${guild.name}" (${guild.id})`);
 });
 
+// ===== WELCOME MESSAGE FOR NEW TICKET CHANNELS =====
+client.on("channelCreate", async (channel) => {
+  try {
+    // Проверяем, что это текстовый канал в гильдии
+    if (!channel.isTextBased() || !channel.guild) return;
+    
+    // Проверяем, содержит ли название канала слово "ticket"
+    const channelName = channel.name.toLowerCase();
+    if (!channelName.includes("ticket")) return;
+
+    console.log(`🎫 New ticket channel created: "${channel.name}" in guild "${channel.guild.name}"`);
+
+    // Небольшая задержка, чтобы канал полностью инициализировался
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Создаем приветственное сообщение
+    const welcomeEmbed = new EmbedBuilder()
+      .setTitle("🎫  Welcome to the Ticket System!")
+      .setDescription(
+        "**Hello!** I'm here to help you with purchases and account management.\n\n" +
+        "**Quick Start Guide:**"
+      )
+      .addFields(
+        {
+          name: "💳  Top Up Your Balance",
+          value: "Use `/pay` to add funds via cryptocurrency",
+          inline: false
+        },
+        {
+          name: "🛒  Purchase Products",
+          value: "Use `/buy` to browse and purchase available products",
+          inline: false
+        },
+        {
+          name: "💰  Check Balance",
+          value: "Use `/balance` to view your current account balance",
+          inline: false
+        },
+        {
+          name: "📖  All Commands",
+          value: "Use `/help` to see the complete list of available commands",
+          inline: false
+        },
+        {
+          name: "🪙  Accepted Cryptocurrencies",
+          value: "₿ Bitcoin • Ł Litecoin • ₮ USDT (TRC20) • 🔺 TRON • 🟡 BNB",
+          inline: false
+        }
+      )
+      .setColor(BRAND_COLOR)
+      .setFooter({ text: FOOTER_TEXT })
+      .setTimestamp();
+
+    const actionRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("btn_pay")
+        .setLabel("💳 Top Up Balance")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId("btn_buy")
+        .setLabel("🛒 Shop")
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId("btn_balance")
+        .setLabel("💰 Balance")
+        .setStyle(ButtonStyle.Secondary)
+    );
+
+    await channel.send({
+      embeds: [welcomeEmbed],
+      components: [actionRow]
+    });
+
+    console.log(`✅ Sent welcome message to channel "${channel.name}"`);
+
+  } catch (error) {
+    console.error(`❌ Error sending welcome message to new channel:`, error.message);
+  }
+});
+
 // ===== CHANNEL RESTRICTION HELPERS =====
 
 /**
