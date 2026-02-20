@@ -42,6 +42,7 @@ const STOCK_CHANNEL_ID   = "1474349576814334047";
 const ROLE_ACCESS           = "Pay Access";
 const ROLE_ACCESS_PLUS      = "Pay Access+";
 const ROLE_NOTIFIER_ACCESS  = "Access";
+const ROLE_BRAINROT         = "Brainrot";
 
 // ===== (ОПЦИОНАЛЬНО) ROLE IDs =====
 const USE_ROLE_IDS        = false;
@@ -87,6 +88,39 @@ const SLASH_COMMANDS = [
   {
     name: "checktime",
     description: "⏰ Check your remaining Notifier subscription time"
+  },
+  {
+    name: "redeem",
+    description: "🎟️ Redeem a coupon for balance",
+    options: [
+      {
+        name: "code",
+        description: "Your coupon code (e.g. COUP-XXXXXXXX)",
+        type: ApplicationCommandOptionType.String,
+        required: true
+      }
+    ]
+  },
+  {
+    name: "generate",
+    description: "🎟️ [Owner] Generate balance coupons",
+    options: [
+      {
+        name: "amount",
+        description: "USD amount per coupon (e.g. 25.00)",
+        type: ApplicationCommandOptionType.Number,
+        required: true,
+        min_value: 0.01
+      },
+      {
+        name: "count",
+        description: "Number of coupons to generate (1-100)",
+        type: ApplicationCommandOptionType.Integer,
+        required: true,
+        min_value: 1,
+        max_value: 100
+      }
+    ]
   },
   {
     name: "viewadmins",
@@ -335,9 +369,7 @@ client.once("ready", async () => {
   setInterval(checkExpiredSubscriptions, 5 * 60 * 1000);
   checkExpiredSubscriptions();
 
-  // Обновить канал стока при старте
   setTimeout(() => updateStockChannel(), 5000);
-  // Периодически обновлять канал стока
   setInterval(updateStockChannel, 5 * 60 * 1000);
 });
 
@@ -346,10 +378,6 @@ client.on("guildCreate", (guild) => {
 });
 
 // ===== STOCK HELPERS =====
-
-/**
- * Считает текущее количество участников с ролью Access (дедупликация по userId).
- */
 async function getNotifierCurrentCount() {
   const seen = new Set();
   for (const [, guild] of client.guilds.cache) {
@@ -367,11 +395,6 @@ async function getNotifierCurrentCount() {
   return seen.size;
 }
 
-/**
- * Обновляет название канала стока.
- * 🛑—stock-info  — если слотов нет
- * 🟢—stock-info  — если есть свободные места
- */
 async function updateStockChannel() {
   try {
     const channel = await client.channels.fetch(STOCK_CHANNEL_ID).catch(() => null);
@@ -384,9 +407,7 @@ async function updateStockChannel() {
     const available    = MAX_NOTIFIER_STOCK - currentCount;
     const isFull       = available <= 0;
 
-    const newName = isFull
-      ? `🛑—stock-info`
-      : `🟢—stock-info`;
+    const newName = isFull ? `🛑—stock-info` : `🟢—stock-info`;
 
     if (channel.name !== newName) {
       await channel.setName(newName);
@@ -414,10 +435,10 @@ client.on("channelCreate", async (channel) => {
         "**Quick Start Guide:**"
       )
       .addFields(
-        { name: "💳  Top Up Your Balance",   value: "Use `/pay` to add funds via cryptocurrency", inline: false },
-        { name: "🛒  Purchase Products",      value: "Use `/buy` to browse and purchase available products", inline: false },
-        { name: "💰  Check Balance",          value: "Use `/balance` to view your current account balance", inline: false },
-        { name: "📖  All Commands",           value: "Use `/help` to see the complete list of available commands", inline: false },
+        { name: "💳  Top Up Your Balance",      value: "Use `/pay` to add funds via cryptocurrency", inline: false },
+        { name: "🛒  Purchase Products",         value: "Use `/buy` to browse and purchase available products", inline: false },
+        { name: "💰  Check Balance",             value: "Use `/balance` to view your current account balance", inline: false },
+        { name: "📖  All Commands",              value: "Use `/help` to see the complete list of available commands", inline: false },
         { name: "🪙  Accepted Cryptocurrencies", value: "₿ Bitcoin • Ł Litecoin • ₮ USDT (TRC20) • 🔺 TRON • 🟡 BNB", inline: false }
       )
       .setColor(BRAND_COLOR)
@@ -438,7 +459,6 @@ client.on("channelCreate", async (channel) => {
 });
 
 // ===== CHANNEL RESTRICTION HELPERS =====
-
 function isAllowedChannel(interaction) {
   if (!interaction.guildId) return true;
   if (interaction.guildId !== RESTRICTED_GUILD_ID) return true;
@@ -456,22 +476,17 @@ function getAvailableProducts(guildId) {
 }
 
 function getNotifierChannelName(guildId) {
-  if (guildId === RESTRICTED_GUILD_ID) {
-    return "💎︱10m-inf";
-  }
+  if (guildId === RESTRICTED_GUILD_ID) return "💎︱10m-inf";
   return "#no";
 }
 
 // ===== ROLE HELPERS =====
-
 function normalizeRoleName(name) {
   return name.trim().toLowerCase();
 }
 
 function memberHasRole(member, roleName, roleId = "") {
-  if (USE_ROLE_IDS && roleId) {
-    return member.roles.cache.has(roleId);
-  }
+  if (USE_ROLE_IDS && roleId) return member.roles.cache.has(roleId);
   const target = normalizeRoleName(roleName);
   return member.roles.cache.some(r => normalizeRoleName(r.name) === target);
 }
@@ -535,13 +550,42 @@ async function getAccessPlusUsers() {
   return users;
 }
 
-// ===== NOTIFIER ACCESS ROLE HELPERS =====
+// ===== BRAINROT ROLE HELPERS =====
+async function getBrainrotUsers() {
+  const seen  = new Set();
+  const users = [];
 
+  for (const [, guild] of client.guilds.cache) {
+    try {
+      await guild.members.fetch({ force: true });
+    } catch (e) {
+      console.error(`❌ Could not fetch members for guild "${guild.name}":`, e.message);
+      continue;
+    }
+
+    const role = guild.roles.cache.find(
+      r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_BRAINROT)
+    );
+
+    if (!role) {
+      console.warn(`⚠️ Role "${ROLE_BRAINROT}" not found in guild "${guild.name}"`);
+      continue;
+    }
+
+    for (const [, member] of role.members) {
+      if (seen.has(member.id)) continue;
+      seen.add(member.id);
+      users.push(member.user);
+    }
+  }
+
+  return users;
+}
+
+// ===== NOTIFIER ACCESS ROLE HELPERS =====
 async function findNotifierRole(guild) {
   if (!guild) return null;
-  if (guild.roles.cache.size <= 1) {
-    await guild.roles.fetch();
-  }
+  if (guild.roles.cache.size <= 1) await guild.roles.fetch();
   const role = guild.roles.cache.find(
     r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_NOTIFIER_ACCESS)
   );
@@ -568,7 +612,6 @@ async function giveNotifierRole(userId, guild) {
     const member = await guild.members.fetch({ user: userId, force: true });
     await member.roles.add(role.id);
     console.log(`✅ Gave "${ROLE_NOTIFIER_ACCESS}" role (${role.id}) to ${userId}`);
-    // Обновить канал стока после выдачи роли
     await updateStockChannel();
     return true;
   } catch (e) {
@@ -582,7 +625,6 @@ async function removeNotifierRole(userId, guild) {
     for (const [, g] of client.guilds.cache) {
       await removeNotifierRole(userId, g);
     }
-    // Обновить канал стока после удаления роли
     await updateStockChannel();
     return true;
   }
@@ -594,7 +636,6 @@ async function removeNotifierRole(userId, guild) {
       await member.roles.remove(role.id);
       console.log(`✅ Removed "${ROLE_NOTIFIER_ACCESS}" role from ${userId}`);
     }
-    // Обновить канал стока после удаления роли
     await updateStockChannel();
     return true;
   } catch (e) {
@@ -604,7 +645,6 @@ async function removeNotifierRole(userId, guild) {
 }
 
 // ===== SUBSCRIPTION HELPERS =====
-
 async function addSubscription(userId, days) {
   const userIdStr = userId.toString();
 
@@ -625,6 +665,44 @@ async function addSubscription(userId, days) {
   }
 
   const newExpiry = new Date(baseDate.getTime() + days * 24 * 60 * 60 * 1000);
+
+  if (data) {
+    const { error } = await supabase
+      .from("subscriptions")
+      .update({ expires_at: newExpiry.toISOString() })
+      .eq("user_id", userIdStr);
+    if (error) { console.error("❌ Subscription update error:", error.message); return false; }
+  } else {
+    const { error } = await supabase
+      .from("subscriptions")
+      .insert({ user_id: userIdStr, expires_at: newExpiry.toISOString() });
+    if (error) { console.error("❌ Subscription insert error:", error.message); return false; }
+  }
+
+  console.log(`✅ Subscription set for ${userIdStr} until ${newExpiry.toISOString()}`);
+  return true;
+}
+
+async function addSubscriptionMs(userId, ms) {
+  const userIdStr = userId.toString();
+
+  const { data, error: selectError } = await supabase
+    .from("subscriptions")
+    .select("expires_at")
+    .eq("user_id", userIdStr)
+    .single();
+
+  let baseDate = new Date();
+
+  if (data) {
+    const existing = new Date(data.expires_at);
+    if (existing > baseDate) baseDate = existing;
+  } else if (selectError && selectError.code !== "PGRST116") {
+    console.error("❌ Subscription select error:", selectError.message);
+    return false;
+  }
+
+  const newExpiry = new Date(baseDate.getTime() + ms);
 
   if (data) {
     const { error } = await supabase
@@ -670,18 +748,11 @@ async function addTimeToUserSubscription(userId, ms) {
     .update({ expires_at: newExpiry.toISOString() })
     .eq("user_id", userIdStr);
 
-  if (error) {
-    console.error("❌ Subscription update error:", error.message);
-    return false;
-  }
-
+  if (error) { console.error("❌ Subscription update error:", error.message); return false; }
   console.log(`✅ Added time to ${userIdStr}. New expiry: ${newExpiry.toISOString()}`);
   return true;
 }
 
-/**
- * Устанавливает конкретное время истечения подписки для пользователя (отсчёт от сейчас + ms).
- */
 async function setSubscriptionExpiry(userId, ms) {
   const userIdStr = userId.toString();
   const newExpiry = new Date(Date.now() + ms);
@@ -707,11 +778,7 @@ async function setSubscriptionExpiry(userId, ms) {
     .update({ expires_at: newExpiry.toISOString() })
     .eq("user_id", userIdStr);
 
-  if (error) {
-    console.error("❌ Subscription set-expiry error:", error.message);
-    return false;
-  }
-
+  if (error) { console.error("❌ Subscription set-expiry error:", error.message); return false; }
   console.log(`✅ Set expiry for ${userIdStr} to ${newExpiry.toISOString()}`);
   return true;
 }
@@ -770,7 +837,6 @@ async function addTimeToAllSubscriptions(ms) {
 }
 
 async function checkExpiredSubscriptions() {
-  // Если подписки на паузе — не проверяем истечение
   if (isPaused) {
     console.log("⏸️ Subscriptions paused — skipping expiry check.");
     return;
@@ -783,15 +849,8 @@ async function checkExpiredSubscriptions() {
     .select("user_id, expires_at")
     .lte("expires_at", new Date().toISOString());
 
-  if (error) {
-    console.error("❌ Error checking expired subscriptions:", error.message);
-    return;
-  }
-
-  if (!data || data.length === 0) {
-    console.log("✅ No expired subscriptions found.");
-    return;
-  }
+  if (error) { console.error("❌ Error checking expired subscriptions:", error.message); return; }
+  if (!data || data.length === 0) { console.log("✅ No expired subscriptions found."); return; }
 
   for (const sub of data) {
     console.log(`⏰ Subscription expired for user ${sub.user_id}`);
@@ -872,31 +931,15 @@ async function deductBalance(userId, amount) {
     return false;
   }
 
-  if (!data) {
-    console.log("⚠️ User not found in database");
-    return false;
-  }
+  if (!data) { console.log("⚠️ User not found in database"); return false; }
 
   const currentBalance = parseFloat(data.balance || 0);
-  console.log(`📊 Current balance: ${currentBalance}, trying to deduct: ${amount}`);
-
-  if (currentBalance < amount) {
-    console.log("⚠️ Insufficient balance");
-    return false;
-  }
+  if (currentBalance < amount) { console.log("⚠️ Insufficient balance"); return false; }
 
   const newBalance = currentBalance - amount;
+  const { error } = await supabase.from("users").update({ balance: newBalance }).eq("user_id", userIdStr);
 
-  const { error } = await supabase
-    .from("users")
-    .update({ balance: newBalance })
-    .eq("user_id", userIdStr);
-
-  if (error) {
-    console.error("❌ Deduct error:", error.message);
-    return false;
-  }
-
+  if (error) { console.error("❌ Deduct error:", error.message); return false; }
   console.log(`✅ Balance deducted. New balance: ${newBalance}`);
   return true;
 }
@@ -908,6 +951,120 @@ async function getBalance(userId) {
     .eq("user_id", userId.toString())
     .single();
   return data ? parseFloat(data.balance || 0) : 0;
+}
+
+// ===== COUPON HELPERS =====
+function generateCouponCode() {
+  const bytes = crypto.randomBytes(5).toString("hex").toUpperCase();
+  return `COUP-${bytes}`;
+}
+
+async function createCoupons(amount, count, createdBy) {
+  const codes = [];
+  for (let i = 0; i < count; i++) {
+    codes.push(generateCouponCode());
+  }
+
+  const records = codes.map(code => ({
+    code,
+    amount,
+    is_used: false,
+    created_by: createdBy.toString()
+  }));
+
+  const { error } = await supabase.from("coupons").insert(records);
+  if (error) {
+    console.error("❌ Error creating coupons:", error.message);
+    return null;
+  }
+
+  console.log(`✅ Created ${count} coupons worth $${amount} each`);
+  return codes;
+}
+
+async function redeemCoupon(code, userId) {
+  const userIdStr = userId.toString();
+  const normalizedCode = code.trim().toUpperCase();
+
+  const { data, error: selectError } = await supabase
+    .from("coupons")
+    .select("*")
+    .eq("code", normalizedCode)
+    .single();
+
+  if (selectError || !data) {
+    return { success: false, reason: "not_found" };
+  }
+
+  if (data.is_used) {
+    return { success: false, reason: "already_used" };
+  }
+
+  const { error: updateError } = await supabase
+    .from("coupons")
+    .update({
+      is_used: true,
+      used_by_user_id: userIdStr,
+      used_at: new Date().toISOString()
+    })
+    .eq("code", normalizedCode);
+
+  if (updateError) {
+    console.error("❌ Coupon redeem update error:", updateError.message);
+    return { success: false, reason: "db_error" };
+  }
+
+  const success = await addBalance(userId, data.amount);
+  if (!success) {
+    return { success: false, reason: "balance_error" };
+  }
+
+  return { success: true, amount: data.amount };
+}
+
+// ===== BRAINROT REQUEST HELPERS =====
+async function createBrainrotRequest(buyerId, brainrotName, robloxInfo) {
+  const { data, error } = await supabase
+    .from("brainrot_requests")
+    .insert({
+      buyer_id: buyerId.toString(),
+      brainrot_name: brainrotName,
+      roblox_info: robloxInfo,
+      status: "pending"
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    console.error("❌ Error creating brainrot request:", error.message);
+    return null;
+  }
+
+  return data.id;
+}
+
+async function updateBrainrotRequest(requestId, status, handledBy) {
+  const { error } = await supabase
+    .from("brainrot_requests")
+    .update({ status, handled_by: handledBy.toString() })
+    .eq("id", requestId);
+
+  if (error) {
+    console.error("❌ Error updating brainrot request:", error.message);
+    return false;
+  }
+  return true;
+}
+
+async function getBrainrotRequest(requestId) {
+  const { data, error } = await supabase
+    .from("brainrot_requests")
+    .select("*")
+    .eq("id", requestId)
+    .single();
+
+  if (error || !data) return null;
+  return data;
 }
 
 // ===== PAYMENT MESSAGE TRACKING =====
@@ -923,7 +1080,6 @@ async function getPaymentMessage(paymentId) {
 }
 
 // ===== KEY HELPERS =====
-
 function resolveStorageId(productId, days = null) {
   if (productId === "auto_joiner" && days) return `${productId}_${days}`;
   return productId;
@@ -936,10 +1092,7 @@ async function getAvailableKeyCount(storageId) {
     .eq("product_id", storageId)
     .eq("is_used", false);
 
-  if (error) {
-    console.error("❌ Error counting keys:", error.message);
-    return 0;
-  }
+  if (error) { console.error("❌ Error counting keys:", error.message); return 0; }
   return count || 0;
 }
 
@@ -1064,16 +1217,18 @@ async function createPayment(userId, amount, currency) {
 }
 
 // ===== DESIGN CONSTANTS =====
-const BRAND_COLOR   = 0x5865F2;
-const SUCCESS_COLOR = 0x2ECC71;
-const WARNING_COLOR = 0xF1C40F;
-const ERROR_COLOR   = 0xE74C3C;
-const NEUTRAL_COLOR = 0x99AAB5;
-const ADMIN_COLOR   = 0xE67E22;
-const PLUS_COLOR    = 0xA855F7;
-const FUNPAY_COLOR  = 0xFF6B35;
-const ACCESS_COLOR  = 0x00BCD4;
-const PAUSE_COLOR   = 0xFF8C00;
+const BRAND_COLOR    = 0x5865F2;
+const SUCCESS_COLOR  = 0x2ECC71;
+const WARNING_COLOR  = 0xF1C40F;
+const ERROR_COLOR    = 0xE74C3C;
+const NEUTRAL_COLOR  = 0x99AAB5;
+const ADMIN_COLOR    = 0xE67E22;
+const PLUS_COLOR     = 0xA855F7;
+const FUNPAY_COLOR   = 0xFF6B35;
+const ACCESS_COLOR   = 0x00BCD4;
+const PAUSE_COLOR    = 0xFF8C00;
+const BRAINROT_COLOR = 0x9B59B6;
+const COUPON_COLOR   = 0x1ABC9C;
 
 const FOOTER_TEXT = "⚡ Nameless Paysystem";
 
@@ -1090,10 +1245,6 @@ function formatDuration(ms) {
   return parts.length > 0 ? parts.join(" ") : "< 1м";
 }
 
-/**
- * Парсит строку времени вида "7d 3h 30m", "1d", "12h", "45m".
- * Возвращает миллисекунды или 0 если ничего не распознано.
- */
 function parseTimeString(str) {
   let totalMs = 0;
   const dMatch = str.match(/(\d+)\s*d/i);
@@ -1116,12 +1267,12 @@ function buildMainMenuEmbed() {
     .addFields(
       {
         name:   "💳  Payments",
-        value:  "`/pay` — Start a crypto top-up\n`/balance` — Check your balance\n`/buy` — Purchase products\n`/checktime` — Check Notifier time",
+        value:  "`/pay` — Start a crypto top-up\n`/balance` — Check your balance\n`/buy` — Purchase products\n`/checktime` — Check Notifier time\n`/redeem` — Redeem a coupon",
         inline: true
       },
       {
         name:   "🔧  Staff",
-        value:  "`/forceadd` — Add balance to a user\n`/addtime` — Add time to user\n`/changetime` — Set custom time\n`/pause` — Pause/Resume timers\n`/addkey` — Add product keys\n`/keylist` — Manage keys\n`/userlist` — Active subscribers\n`/ban` — Revoke access\n`/compensate` — Add time to all",
+        value:  "`/forceadd` — Add balance to a user\n`/addtime` — Add time to user\n`/changetime` — Set custom time\n`/pause` — Pause/Resume timers\n`/addkey` — Add product keys\n`/keylist` — Manage keys\n`/userlist` — Active subscribers\n`/ban` — Revoke access\n`/compensate` — Add time to all\n`/generate` — Generate coupons",
         inline: true
       },
       {
@@ -1136,7 +1287,8 @@ function buildMainMenuEmbed() {
         value:
           `**${ROLE_ACCESS}** — Can use staff commands\n` +
           `**${ROLE_ACCESS_PLUS}** — All above + receives payment notifications\n` +
-          `**${ROLE_NOTIFIER_ACCESS}** — Given to Notifier subscribers`,
+          `**${ROLE_NOTIFIER_ACCESS}** — Given to Notifier subscribers\n` +
+          `**${ROLE_BRAINROT}** — Can handle Brainrot payments`,
         inline: false
       }
     )
@@ -1174,7 +1326,6 @@ async function buildShopEmbed(guildId) {
     .setTimestamp();
 
   const products = getAvailableProducts(guildId);
-  const channelName = getNotifierChannelName(guildId);
 
   for (const [, product] of Object.entries(products)) {
     if (product.isAccess) {
@@ -1194,9 +1345,7 @@ async function buildShopEmbed(guildId) {
         product.tiers.map(async t => {
           const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
           const orig  = t.originalPrice ? ` ~~$${t.originalPrice}~~` : "";
-          return (
-            `**${t.days} day${t.days > 1 ? "s" : ""}** —${orig} **$${t.price}** 🔥  📦 \`${stock}\` in stock`
-          );
+          return `**${t.days} day${t.days > 1 ? "s" : ""}** —${orig} **$${t.price}** 🔥  📦 \`${stock}\` in stock`;
         })
       );
       embed.addFields({
@@ -1233,6 +1382,22 @@ function buildFunPayEmbed() {
     .setTimestamp();
 }
 
+function buildBrainrotsInfoEmbed() {
+  return new EmbedBuilder()
+    .setTitle("🧠  Pay with Brainrots")
+    .setDescription(
+      "**Pay using your Roblox Brainrot farming!**\n\n" +
+      "To submit a Brainrot payment request, click the button below.\n\n" +
+      "**You will need to provide:**\n" +
+      "> 🎮 Brainrot name + generation rate (e.g. `Tralalero 1000/s`)\n" +
+      "> 🔗 Private server link **OR** your Roblox username\n\n" +
+      "Our **Brainrot** staff will review your request and assign you Notifier access accordingly."
+    )
+    .setColor(BRAINROT_COLOR)
+    .setFooter({ text: FOOTER_TEXT })
+    .setTimestamp();
+}
+
 function buildPaymentEmbed(payment, currency, status = "waiting") {
   const cur = CURRENCIES[currency] || { emoji: "🪙", name: currency, color: BRAND_COLOR };
   const cfg = STATUS_CONFIG[status];
@@ -1248,9 +1413,7 @@ function buildPaymentEmbed(payment, currency, status = "waiting") {
     embed.addFields(
       {
         name:  "📬  Deposit Address",
-        value: payment.pay_address
-          ? `\`${payment.pay_address}\``
-          : "`Address pending...`"
+        value: payment.pay_address ? `\`${payment.pay_address}\`` : "`Address pending...`"
       },
       { name: "💸  Amount",    value: `\`${payment.pay_amount} ${payment.pay_currency}\``, inline: true },
       { name: "💵  USD Value", value: `\`${payment.price_amount} USD\``,                   inline: true },
@@ -1264,8 +1427,8 @@ function buildPaymentEmbed(payment, currency, status = "waiting") {
     );
   } else if (["confirming", "confirmed"].includes(status)) {
     embed.addFields(
-      { name: "💵  Amount",   value: `\`${payment.price_amount} USD\``,  inline: true },
-      { name: "🪙  Currency", value: `\`${payment.pay_currency}\``, inline: true }
+      { name: "💵  Amount",   value: `\`${payment.price_amount} USD\``, inline: true },
+      { name: "🪙  Currency", value: `\`${payment.pay_currency}\``,     inline: true }
     );
   }
 
@@ -1344,7 +1507,12 @@ function buildPaymentMethodMenu() {
       .setLabel("🎮 Pay via FunPay")
       .setDescription("Purchase from our resellers")
       .setValue("funpay")
-      .setEmoji("🛒")
+      .setEmoji("🛒"),
+    new StringSelectMenuOptionBuilder()
+      .setLabel("🧠 Pay with Brainrots")
+      .setDescription("Pay using Roblox brainrot farming")
+      .setValue("brainrots")
+      .setEmoji("🎮")
   ];
 
   return new ActionRowBuilder().addComponents(
@@ -1537,11 +1705,147 @@ client.on("interactionCreate", async (interaction) => {
             .setTitle("⏰  Notifier Subscription Status")
             .setDescription(`Your **Notifier** access is active!${pauseNote}`)
             .addFields(
-              { name: "⏱️ Time Remaining", value: `\`${timeLeft}\``,                         inline: true },
-              { name: "📅 Expires",        value: `<t:${unixExpiry}:F>`,                     inline: true },
+              { name: "⏱️ Time Remaining", value: `\`${timeLeft}\``,                           inline: true },
+              { name: "📅 Expires",        value: `<t:${unixExpiry}:F>`,                       inline: true },
               { name: "🔔 Status",         value: `**Active** — ${ROLE_NOTIFIER_ACCESS} role`, inline: false }
             )
             .setColor(isPaused ? PAUSE_COLOR : ACCESS_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
+    }
+
+    // /redeem
+    if (commandName === "redeem") {
+      await interaction.deferReply({ flags: 64 });
+
+      const code = interaction.options.getString("code");
+      const result = await redeemCoupon(code, interaction.user.id);
+
+      if (!result.success) {
+        const reasonMap = {
+          not_found:    "❌ This coupon code does not exist. Please check the code and try again.",
+          already_used: "⚠️ This coupon has already been redeemed.",
+          db_error:     "❌ A database error occurred. Please try again later.",
+          balance_error:"❌ Failed to apply balance. Please contact support."
+        };
+
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🎟️  Coupon Redemption Failed")
+              .setDescription(reasonMap[result.reason] || "Unknown error occurred.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      }
+
+      const newBalance = await getBalance(interaction.user.id);
+
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("🎟️  Coupon Redeemed!")
+            .setDescription(`Successfully added **$${result.amount.toFixed(2)}** to your balance!`)
+            .addFields(
+              { name: "🎟️ Code",         value: `\`${code.toUpperCase()}\``,          inline: true },
+              { name: "➕ Amount Added",  value: `\`+$${result.amount.toFixed(2)}\``,  inline: true },
+              { name: "💰 New Balance",   value: `\`$${newBalance.toFixed(2)}\``,      inline: true }
+            )
+            .setColor(COUPON_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
+    }
+
+    // /generate (owner only)
+    if (commandName === "generate") {
+      if (interaction.user.id !== OWNER_ID) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription("This command is restricted to the **bot owner** only.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      await interaction.deferReply({ flags: 64 });
+
+      const amount = interaction.options.getNumber("amount");
+      const count  = interaction.options.getInteger("count");
+
+      const codes = await createCoupons(amount, count, interaction.user.id);
+
+      if (!codes) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Generation Failed")
+              .setDescription("Failed to generate coupons. Check server logs.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      // Build file content
+      const fileContent =
+        `Nameless Paysystem — Balance Coupons\n` +
+        `======================================\n` +
+        `Amount per coupon: $${amount.toFixed(2)} USD\n` +
+        `Total coupons: ${count}\n` +
+        `Generated: ${new Date().toISOString()}\n` +
+        `Generated by: ${interaction.user.tag}\n` +
+        `======================================\n\n` +
+        `COUPON CODES (use /redeem <code>):\n\n` +
+        codes.map((c, i) => `${i + 1}. ${c}`).join("\n") +
+        `\n\n======================================\n` +
+        `Keep these codes safe and secure.\n`;
+
+      const attachment = new AttachmentBuilder(
+        Buffer.from(fileContent, "utf-8"),
+        { name: `Coupons_${amount}USD_${Date.now()}.txt` }
+      );
+
+      try {
+        await interaction.user.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🎟️  Coupons Generated")
+              .setDescription(`Your **${count}** coupon(s) worth **$${amount.toFixed(2)}** each are attached below.`)
+              .addFields(
+                { name: "💵 Value Each", value: `\`$${amount.toFixed(2)} USD\``, inline: true },
+                { name: "🔢 Count",      value: `\`${count}\``,                  inline: true }
+              )
+              .setColor(COUPON_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ],
+          files: [attachment]
+        });
+      } catch {
+        console.log("⚠️ Could not DM owner — replying directly");
+      }
+
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("✅  Coupons Generated Successfully")
+            .setDescription(`**${count}** coupon(s) worth **$${amount.toFixed(2)}** each have been sent to your DMs.`)
+            .addFields(
+              { name: "💵 Value Each", value: `\`$${amount.toFixed(2)} USD\``, inline: true },
+              { name: "🔢 Count",      value: `\`${count}\``,                  inline: true },
+              { name: "📬 Delivery",   value: "Sent to your DMs as a `.txt` file", inline: false }
+            )
+            .setColor(COUPON_COLOR)
             .setFooter({ text: FOOTER_TEXT })
             .setTimestamp()
         ]
@@ -1555,7 +1859,8 @@ client.on("interactionCreate", async (interaction) => {
         .setDescription(
           "**Step 1 / 2** — Choose your payment method.\n\n" +
           "💰 **Balance** — Use your account balance (instant delivery)\n" +
-          "🎮 **FunPay** — Purchase from our trusted resellers"
+          "🎮 **FunPay** — Purchase from our trusted resellers\n" +
+          "🧠 **Brainrots** — Pay with Roblox brainrot farming"
         )
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT })
@@ -1690,7 +1995,7 @@ client.on("interactionCreate", async (interaction) => {
             )
             .addFields(
               { name: "👤 User", value: `<@${targetUser.id}> (\`${targetUser.tag}\`)`, inline: true },
-              { name: "🛠️ By",  value: `<@${interaction.user.id}>`,                  inline: true }
+              { name: "🛠️ By",  value: `<@${interaction.user.id}>`,                   inline: true }
             )
             .setColor(ERROR_COLOR)
             .setFooter({ text: FOOTER_TEXT })
@@ -1780,8 +2085,8 @@ client.on("interactionCreate", async (interaction) => {
               .setTitle("🎁  Extra Time Added!")
               .setDescription(`An administrator has added **+${label}** to your Notifier subscription!`)
               .addFields(
-                { name: "⏱️ Time Added",  value: `\`+${label}\``,                               inline: true },
-                { name: "📅 New Expiry",  value: unixExpiry ? `<t:${unixExpiry}:F>` : "Unknown", inline: true }
+                { name: "⏱️ Time Added", value: `\`+${label}\``,                               inline: true },
+                { name: "📅 New Expiry", value: unixExpiry ? `<t:${unixExpiry}:F>` : "Unknown", inline: true }
               )
               .setColor(SUCCESS_COLOR)
               .setFooter({ text: FOOTER_TEXT })
@@ -1810,7 +2115,7 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // ===== /changetime =====
+    // ===== /changetime — FIXED: show modal immediately, validate in modal submit =====
     if (commandName === "changetime") {
       const accessTier = await getAccessTier(interaction.user.id);
       if (!accessTier) {
@@ -1828,24 +2133,8 @@ client.on("interactionCreate", async (interaction) => {
 
       const targetUser = interaction.options.getUser("user");
 
-      // Проверяем наличие подписки перед показом модального окна
-      const sub = await getSubscription(targetUser.id);
-      if (!sub) {
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  No Active Subscription")
-              .setDescription(
-                `<@${targetUser.id}> doesn't have an active **Notifier** subscription.\n\n` +
-                `They need to purchase access first using \`/buy\`.`
-              )
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ],
-          ephemeral: true
-        });
-      }
-
+      // Show modal immediately to avoid 3-second timeout
+      // Subscription validation is done inside the modal submit handler
       const modal = new ModalBuilder()
         .setCustomId(`modal_changetime_${targetUser.id}`)
         .setTitle(`Set Time — ${targetUser.username}`);
@@ -1879,11 +2168,9 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (!isPaused) {
-        // === PAUSE ===
         isPaused       = true;
         pauseStartTime = new Date();
-
-        const subs = await getAllActiveSubscriptions();
+        const subs     = await getAllActiveSubscriptions();
 
         return interaction.editReply({
           embeds: [
@@ -1895,9 +2182,9 @@ client.on("interactionCreate", async (interaction) => {
                 "When resumed, the paused duration will be **automatically added back** to all subscribers."
               )
               .addFields(
-                { name: "👥 Active Subscribers", value: `\`${subs.length}\``,           inline: true },
-                { name: "🕐 Paused At",          value: `<t:${Math.floor(pauseStartTime.getTime() / 1000)}:F>`, inline: true },
-                { name: "🛠️ By",                 value: `<@${interaction.user.id}>`,   inline: false }
+                { name: "👥 Active Subscribers", value: `\`${subs.length}\``,                                    inline: true  },
+                { name: "🕐 Paused At",          value: `<t:${Math.floor(pauseStartTime.getTime() / 1000)}:F>`, inline: true  },
+                { name: "🛠️ By",                 value: `<@${interaction.user.id}>`,                            inline: false }
               )
               .setColor(PAUSE_COLOR)
               .setFooter({ text: FOOTER_TEXT })
@@ -1906,17 +2193,15 @@ client.on("interactionCreate", async (interaction) => {
         });
 
       } else {
-        // === RESUME ===
         const elapsed      = new Date() - pauseStartTime;
         const elapsedLabel = formatDuration(elapsed);
         isPaused           = false;
         pauseStartTime     = null;
 
         const count = await addTimeToAllSubscriptions(elapsed);
+        const subs  = await getAllActiveSubscriptions();
+        let dmsOk   = 0;
 
-        // DM всем подписчикам
-        const subs = await getAllActiveSubscriptions();
-        let dmsOk  = 0;
         for (const sub of subs) {
           try {
             const user = await client.users.fetch(sub.user_id);
@@ -1948,10 +2233,10 @@ client.on("interactionCreate", async (interaction) => {
                 `All active subscribers received **\`+${elapsedLabel}\`** compensation.`
               )
               .addFields(
-                { name: "⏸️ Paused Duration",  value: `\`${elapsedLabel}\``,       inline: true },
-                { name: "👥 Users Compensated", value: `\`${count}\``,             inline: true },
-                { name: "📬 DMs Sent",          value: `\`${dmsOk}\``,             inline: true },
-                { name: "🛠️ By",               value: `<@${interaction.user.id}>`, inline: false }
+                { name: "⏸️ Paused Duration",   value: `\`${elapsedLabel}\``,       inline: true  },
+                { name: "👥 Users Compensated", value: `\`${count}\``,              inline: true  },
+                { name: "📬 DMs Sent",           value: `\`${dmsOk}\``,             inline: true  },
+                { name: "🛠️ By",                value: `<@${interaction.user.id}>`, inline: false }
               )
               .setColor(SUCCESS_COLOR)
               .setFooter({ text: FOOTER_TEXT })
@@ -2002,7 +2287,6 @@ client.on("interactionCreate", async (interaction) => {
       for (const sub of subsBefore) {
         try {
           const user = await client.users.fetch(sub.user_id);
-
           const parts = [];
           if (days > 0)    parts.push(`${days} day${days > 1 ? "s" : ""}`);
           if (hours > 0)   parts.push(`${hours} hour${hours > 1 ? "s" : ""}`);
@@ -2037,9 +2321,9 @@ client.on("interactionCreate", async (interaction) => {
             .setTitle("⏰  Compensation Applied")
             .setDescription(`Added **+${label}** to **${count}** active subscriber(s).`)
             .addFields(
-              { name: "⏱️ Time Added",    value: `\`+${label}\``, inline: true },
-              { name: "👥 Users Updated", value: `\`${count}\``,  inline: true },
-              { name: "📬 DMs Sent",      value: `\`${dmsOk}\``,  inline: true },
+              { name: "⏱️ Time Added",    value: `\`+${label}\``,              inline: true },
+              { name: "👥 Users Updated", value: `\`${count}\``,               inline: true },
+              { name: "📬 DMs Sent",      value: `\`${dmsOk}\``,              inline: true },
               { name: "🛠️ Executed By",   value: `<@${interaction.user.id}>`, inline: false }
             )
             .setColor(SUCCESS_COLOR)
@@ -2066,10 +2350,10 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      const productId  = interaction.options.getString("product");
-      const tierDays   = interaction.options.getInteger("tier");
-      const keysText   = interaction.options.getString("keys");
-      const file       = interaction.options.getAttachment("file");
+      const productId = interaction.options.getString("product");
+      const tierDays  = interaction.options.getInteger("tier");
+      const keysText  = interaction.options.getString("keys");
+      const file      = interaction.options.getAttachment("file");
 
       if (productId === "auto_joiner" && !tierDays) {
         return interaction.editReply({
@@ -2132,7 +2416,6 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       const success = await addKeys(storageId, keys);
-
       if (!success) {
         return interaction.editReply({
           embeds: [
@@ -2145,8 +2428,8 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      const product  = PRODUCTS[productId];
-      const newStock = await getAvailableKeyCount(storageId);
+      const product   = PRODUCTS[productId];
+      const newStock  = await getAvailableKeyCount(storageId);
       const tierLabel = tierDays ? ` (${tierDays} Day${tierDays > 1 ? "s" : ""})` : "";
 
       return interaction.editReply({
@@ -2241,12 +2524,8 @@ client.on("interactionCreate", async (interaction) => {
           roleBasic = ROLE_ID_ACCESS      ? guild.roles.cache.get(ROLE_ID_ACCESS)      : null;
           rolePlus  = ROLE_ID_ACCESS_PLUS ? guild.roles.cache.get(ROLE_ID_ACCESS_PLUS) : null;
         } else {
-          roleBasic = guild.roles.cache.find(
-            r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_ACCESS)
-          );
-          rolePlus = guild.roles.cache.find(
-            r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_ACCESS_PLUS)
-          );
+          roleBasic = guild.roles.cache.find(r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_ACCESS));
+          rolePlus  = guild.roles.cache.find(r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_ACCESS_PLUS));
         }
 
         if (rolePlus) {
@@ -2278,8 +2557,8 @@ client.on("interactionCreate", async (interaction) => {
           `Total found: **${basicUsers.length + plusUsers.length}** user(s).`
         )
         .addFields(
-          { name: `🔑  ${ROLE_ACCESS} (${basicUsers.length})`,      value: formatList(basicUsers), inline: false },
-          { name: `👑  ${ROLE_ACCESS_PLUS} (${plusUsers.length})`,  value: formatList(plusUsers),  inline: false }
+          { name: `🔑  ${ROLE_ACCESS} (${basicUsers.length})`,     value: formatList(basicUsers), inline: false },
+          { name: `👑  ${ROLE_ACCESS_PLUS} (${plusUsers.length})`, value: formatList(plusUsers),  inline: false }
         )
         .setColor(0x3498DB)
         .setFooter({ text: `Owner debug • ${FOOTER_TEXT}` })
@@ -2293,7 +2572,6 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.deferReply({ flags: 64 });
 
       const accessTierLevel = await getAccessTier(interaction.user.id);
-
       if (!accessTierLevel) {
         return interaction.editReply({
           embeds: [
@@ -2389,7 +2667,8 @@ client.on("interactionCreate", async (interaction) => {
         .setDescription(
           "**Step 1 / 2** — Choose your payment method.\n\n" +
           "💰 **Balance** — Use your account balance (instant delivery)\n" +
-          "🎮 **FunPay** — Purchase from our trusted resellers"
+          "🎮 **FunPay** — Purchase from our trusted resellers\n" +
+          "🧠 **Brainrots** — Pay with Roblox brainrot farming"
         )
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT })
@@ -2400,6 +2679,132 @@ client.on("interactionCreate", async (interaction) => {
         components: [buildPaymentMethodMenu()],
         ephemeral: true
       });
+    }
+
+    // ── Brainrot: open submission modal ──
+    if (interaction.customId === "btn_brainrot_submit") {
+      const modal = new ModalBuilder()
+        .setCustomId("modal_brainrot_request")
+        .setTitle("🧠 Brainrot Payment Request");
+
+      const brainrotInput = new TextInputBuilder()
+        .setCustomId("brainrot_name_gen")
+        .setLabel("Brainrot name + generation/sec")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("e.g. Tralalero Tralala 1000/s")
+        .setRequired(true);
+
+      const robloxInput = new TextInputBuilder()
+        .setCustomId("roblox_info")
+        .setLabel("Roblox private server link OR your username")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("e.g. https://www.roblox.com/... OR YourRobloxUsername")
+        .setRequired(true);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(brainrotInput),
+        new ActionRowBuilder().addComponents(robloxInput)
+      );
+
+      return interaction.showModal(modal);
+    }
+
+    // ── Brainrot staff: Accept ──
+    if (interaction.customId.startsWith("brainrot_accept_")) {
+      // customId: brainrot_accept_{requestId}_{buyerId}
+      const withoutPrefix  = interaction.customId.slice("brainrot_accept_".length);
+      const separatorIndex = withoutPrefix.lastIndexOf("_");
+      const requestId      = withoutPrefix.substring(0, separatorIndex);
+      const buyerId        = withoutPrefix.substring(separatorIndex + 1);
+
+      const request = await getBrainrotRequest(requestId);
+      if (!request) {
+        return interaction.reply({
+          content: "❌ Запрос не найден в базе данных.",
+          ephemeral: true
+        });
+      }
+
+      if (request.status !== "pending") {
+        return interaction.reply({
+          content: `⚠️ Этот запрос уже обработан (статус: **${request.status}**).`,
+          ephemeral: true
+        });
+      }
+
+      // Show modal to choose time
+      const modal = new ModalBuilder()
+        .setCustomId(`modal_brainrot_time_${requestId}_${buyerId}`)
+        .setTitle("⏰ Сколько времени выдать?");
+
+      const timeInput = new TextInputBuilder()
+        .setCustomId("brainrot_time_input")
+        .setLabel("Время нотифаера (например: 7d / 3h / 1d 12h)")
+        .setStyle(TextInputStyle.Short)
+        .setPlaceholder("Примеры: 3d  |  7d  |  14d  |  1d 12h  |  6h")
+        .setRequired(true);
+
+      modal.addComponents(new ActionRowBuilder().addComponents(timeInput));
+      return interaction.showModal(modal);
+    }
+
+    // ── Brainrot staff: Decline ──
+    if (interaction.customId.startsWith("brainrot_decline_")) {
+      const withoutPrefix  = interaction.customId.slice("brainrot_decline_".length);
+      const separatorIndex = withoutPrefix.lastIndexOf("_");
+      const requestId      = withoutPrefix.substring(0, separatorIndex);
+      const buyerId        = withoutPrefix.substring(separatorIndex + 1);
+
+      const request = await getBrainrotRequest(requestId);
+      if (!request) {
+        return interaction.reply({ content: "❌ Запрос не найден.", ephemeral: true });
+      }
+
+      if (request.status !== "pending") {
+        return interaction.reply({
+          content: `⚠️ Этот запрос уже обработан (статус: **${request.status}**).`,
+          ephemeral: true
+        });
+      }
+
+      await updateBrainrotRequest(requestId, "declined", interaction.user.id);
+
+      // Notify buyer
+      try {
+        const buyer = await client.users.fetch(buyerId);
+        await buyer.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Brainrot Request Declined")
+              .setDescription(
+                "Your **Brainrot** payment request has been declined by our staff.\n\n" +
+                "You can try again with `/buy` or use another payment method."
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      } catch {
+        console.log(`⚠️ Could not DM buyer ${buyerId} about brainrot decline`);
+      }
+
+      // Update staff DM message
+      try {
+        await interaction.update({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Запрос отклонён")
+              .setDescription(`Вы отклонили запрос от <@${buyerId}>.`)
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ],
+          components: []
+        });
+      } catch {
+        await interaction.reply({ content: "✅ Запрос отклонён. Покупатель уведомлён.", ephemeral: true });
+      }
     }
 
     // ── Buy product buttons ──
@@ -2413,16 +2818,13 @@ client.on("interactionCreate", async (interaction) => {
         const productId      = withoutPrefix.substring(0, lastUnderscore);
         const days           = parseInt(withoutPrefix.substring(lastUnderscore + 1));
 
-        console.log(`📦 Parsed → productId: "${productId}", days: ${days}`);
-
-        // Проверяем доступность продукта в этой гильдии
         const availableProducts = getAvailableProducts(interaction.guildId);
         if (!availableProducts[productId]) {
           return interaction.editReply({
             embeds: [
               new EmbedBuilder()
                 .setTitle("❌  Product Not Available")
-                .setDescription(`This product is not available on this server.`)
+                .setDescription("This product is not available on this server.")
                 .setColor(ERROR_COLOR)
                 .setFooter({ text: FOOTER_TEXT })
             ]
@@ -2430,7 +2832,6 @@ client.on("interactionCreate", async (interaction) => {
         }
 
         const product = PRODUCTS[productId];
-
         if (!product) {
           return interaction.editReply({
             embeds: [
@@ -2444,7 +2845,6 @@ client.on("interactionCreate", async (interaction) => {
         }
 
         const tier = product.tiers.find(t => t.days === days);
-
         if (!tier) {
           return interaction.editReply({
             embeds: [
@@ -2458,8 +2858,6 @@ client.on("interactionCreate", async (interaction) => {
         }
 
         const balance = await getBalance(interaction.user.id);
-        console.log(`💰 User balance: ${balance}, Required: ${tier.price}`);
-
         if (balance < tier.price) {
           return interaction.editReply({
             embeds: [
@@ -2478,7 +2876,6 @@ client.on("interactionCreate", async (interaction) => {
 
         // ── NOTIFIER: role-based purchase ──
         if (product.isAccess) {
-          // === ПРОВЕРКА СТОКА ===
           const currentCount = await getNotifierCurrentCount();
           const available    = MAX_NOTIFIER_STOCK - currentCount;
 
@@ -2523,7 +2920,6 @@ client.on("interactionCreate", async (interaction) => {
 
           const expiresAt  = sub.data ? new Date(sub.data.expires_at) : null;
           const unixExpiry = expiresAt ? Math.floor(expiresAt.getTime() / 1000) : null;
-
           const channelName = getNotifierChannelName(interaction.guildId);
 
           await interaction.editReply({
@@ -2560,8 +2956,8 @@ client.on("interactionCreate", async (interaction) => {
                     `Your **${ROLE_NOTIFIER_ACCESS}** role is now active.`
                   )
                   .addFields(
-                    { name: "📅 Duration",  value: `\`${days} day${days > 1 ? "s" : ""}\``, inline: true },
-                    { name: "💵 Price",     value: `\`$${tier.price}\``,                     inline: true },
+                    { name: "📅 Duration", value: `\`${days} day${days > 1 ? "s" : ""}\``, inline: true },
+                    { name: "💵 Price",    value: `\`$${tier.price}\``,                     inline: true },
                     {
                       name:  "⏰ Expires",
                       value: unixExpiry ? `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)` : "Unknown",
@@ -2789,6 +3185,21 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      // ── BRAINROTS payment method ──
+      if (method === "brainrots") {
+        const brainrotRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("btn_brainrot_submit")
+            .setLabel("🧠 Submit Brainrot Request")
+            .setStyle(ButtonStyle.Primary)
+        );
+
+        return interaction.update({
+          embeds: [buildBrainrotsInfoEmbed()],
+          components: [brainrotRow]
+        });
+      }
+
       if (method === "balance") {
         // ── RESTRICTED GUILD: пропускаем выбор продукта, сразу Notifier ──
         if (interaction.guildId === RESTRICTED_GUILD_ID) {
@@ -2821,7 +3232,6 @@ client.on("interactionCreate", async (interaction) => {
 
           const row = buildTierButtons("notifier");
 
-          // Если слотов нет — отключаем кнопки
           if (available <= 0) {
             const disabledRow = new ActionRowBuilder().addComponents(
               product.tiers.map(t =>
@@ -2839,7 +3249,7 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.update({ embeds: [embed], components: row ? [row] : [] });
         }
 
-        // Обычный сервер — стандартный флоу с выбором продукта
+        // Обычный сервер
         const embed = await buildShopEmbed(interaction.guildId);
         return interaction.update({
           embeds: [embed],
@@ -2851,14 +3261,13 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.customId === "select_product") {
       const productId = interaction.values[0];
 
-      // Проверяем доступность продукта в этой гильдии
       const availableProducts = getAvailableProducts(interaction.guildId);
       if (!availableProducts[productId]) {
         return interaction.update({
           embeds: [
             new EmbedBuilder()
               .setTitle("❌  Product Not Available")
-              .setDescription(`This product is not available on this server.`)
+              .setDescription("This product is not available on this server.")
               .setColor(ERROR_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ],
@@ -2867,7 +3276,6 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       const product = PRODUCTS[productId];
-      const channelName = getNotifierChannelName(interaction.guildId);
 
       if (product.isAccess) {
         const currentCount = await getNotifierCurrentCount();
@@ -2896,7 +3304,6 @@ client.on("interactionCreate", async (interaction) => {
           .setFooter({ text: "Select a duration below to purchase • " + FOOTER_TEXT })
           .setTimestamp();
 
-        // Если слотов нет — отключить кнопки
         if (available <= 0) {
           const disabledRow = new ActionRowBuilder().addComponents(
             product.tiers.map(t =>
@@ -2919,9 +3326,7 @@ client.on("interactionCreate", async (interaction) => {
         product.tiers.map(async t => {
           const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
           const orig  = t.originalPrice ? ` ~~$${t.originalPrice}~~` : "";
-          return (
-            `**${t.days} day${t.days > 1 ? "s" : ""}** —${orig} **$${t.price}** 🔥  📦 \`${stock}\` in stock`
-          );
+          return `**${t.days} day${t.days > 1 ? "s" : ""}** —${orig} **$${t.price}** 🔥  📦 \`${stock}\` in stock`;
         })
       );
 
@@ -2996,7 +3401,7 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // ===== MODAL: changetime =====
+    // ===== MODAL: changetime (FIXED) =====
     if (interaction.customId.startsWith("modal_changetime_")) {
       await interaction.deferReply({ flags: 64 });
 
@@ -3019,36 +3424,57 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      // Validate subscription in modal submit (not before showing modal)
       const sub = await getSubscription(targetUserId);
       if (!sub) {
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  No Active Subscription")
-              .setDescription(`<@${targetUserId}> doesn't have an active **Notifier** subscription.`)
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        });
+        // Try to insert subscription if not exists (for new users)
+        const { data: rawSub } = await supabase
+          .from("subscriptions")
+          .select("expires_at")
+          .eq("user_id", targetUserId)
+          .single();
+
+        if (!rawSub) {
+          return interaction.editReply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("❌  No Subscription Found")
+                .setDescription(
+                  `<@${targetUserId}> doesn't have a Notifier subscription in the database.\n\n` +
+                  `Use \`/ban\` first to clear, then they need to purchase access with \`/buy\`.`
+                )
+                .setColor(ERROR_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+            ]
+          });
+        }
       }
 
       const success = await setSubscriptionExpiry(targetUserId, totalMs);
 
       if (!success) {
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  Database Error")
-              .setDescription("Failed to update subscription time. Check server logs.")
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        });
+        // Subscription row may not exist — create it
+        const newExpiry = new Date(Date.now() + totalMs);
+        const { error: insertError } = await supabase
+          .from("subscriptions")
+          .upsert({ user_id: targetUserId, expires_at: newExpiry.toISOString() });
+
+        if (insertError) {
+          return interaction.editReply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("❌  Database Error")
+                .setDescription("Failed to update subscription time. Check server logs.")
+                .setColor(ERROR_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+            ]
+          });
+        }
       }
 
-      const newExpiry   = new Date(Date.now() + totalMs);
-      const unixExpiry  = Math.floor(newExpiry.getTime() / 1000);
-      const timeLabel   = formatDuration(totalMs);
+      const newExpiry  = new Date(Date.now() + totalMs);
+      const unixExpiry = Math.floor(newExpiry.getTime() / 1000);
+      const timeLabel  = formatDuration(totalMs);
 
       let targetUser;
       try {
@@ -3061,8 +3487,8 @@ client.on("interactionCreate", async (interaction) => {
                 `An administrator has set your Notifier subscription to **${timeLabel}** from now.`
               )
               .addFields(
-                { name: "⏱️ New Duration", value: `\`${timeLabel}\``,          inline: true },
-                { name: "📅 Expires",      value: `<t:${unixExpiry}:F>`,       inline: true }
+                { name: "⏱️ New Duration", value: `\`${timeLabel}\``,    inline: true },
+                { name: "📅 Expires",      value: `<t:${unixExpiry}:F>`, inline: true }
               )
               .setColor(ACCESS_COLOR)
               .setFooter({ text: FOOTER_TEXT })
@@ -3077,9 +3503,7 @@ client.on("interactionCreate", async (interaction) => {
         embeds: [
           new EmbedBuilder()
             .setTitle("🕐  Time Set Successfully")
-            .setDescription(
-              `<@${targetUserId}>'s subscription has been set to **${timeLabel}** from now.`
-            )
+            .setDescription(`<@${targetUserId}>'s subscription has been set to **${timeLabel}** from now.`)
             .addFields(
               { name: "👤 Target User", value: `<@${targetUserId}>`,                            inline: true  },
               { name: "⏱️ New Time",    value: `\`${timeLabel}\``,                              inline: true  },
@@ -3093,6 +3517,246 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
+    // ===== MODAL: brainrot request submission =====
+    if (interaction.customId === "modal_brainrot_request") {
+      await interaction.deferReply({ flags: 64 });
+
+      const brainrotNameGen = interaction.fields.getTextInputValue("brainrot_name_gen").trim();
+      const robloxInfo      = interaction.fields.getTextInputValue("roblox_info").trim();
+      const buyerId         = interaction.user.id;
+
+      // Check Notifier stock
+      const currentCount = await getNotifierCurrentCount();
+      const available    = MAX_NOTIFIER_STOCK - currentCount;
+
+      if (available <= 0) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🛑  No Slots Available")
+              .setDescription(
+                `**Notifier** is currently full! (**${currentCount}/${MAX_NOTIFIER_STOCK}** slots occupied)\n\n` +
+                `Please check back later when a slot opens up.`
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      }
+
+      // Save request to DB
+      const requestId = await createBrainrotRequest(buyerId, brainrotNameGen, robloxInfo);
+
+      if (!requestId) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Request Failed")
+              .setDescription("Could not save your request. Please try again later.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      // Get Brainrot role members and DM them in Russian
+      const brainrotUsers = await getBrainrotUsers();
+
+      if (brainrotUsers.length === 0) {
+        await updateBrainrotRequest(requestId, "no_staff", "system");
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  No Staff Available")
+              .setDescription(
+                "There are currently no **Brainrot** staff available to handle your request.\n\n" +
+                "Please try another payment method or contact support."
+              )
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      // Build buttons for staff DM
+      const acceptButton = new ButtonBuilder()
+        .setCustomId(`brainrot_accept_${requestId}_${buyerId}`)
+        .setLabel("✅ Принять")
+        .setStyle(ButtonStyle.Success);
+
+      const declineButton = new ButtonBuilder()
+        .setCustomId(`brainrot_decline_${requestId}_${buyerId}`)
+        .setLabel("❌ Отказать")
+        .setStyle(ButtonStyle.Danger);
+
+      const staffRow = new ActionRowBuilder().addComponents(acceptButton, declineButton);
+
+      // DM all Brainrot staff in Russian
+      let notifiedCount = 0;
+      for (const staffUser of brainrotUsers) {
+        try {
+          await staffUser.send({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("🧠  Новая заявка на оплату Brainrot!")
+                .setDescription(
+                  `Пользователь хочет купить **Notifier** через Brainrot фарм.\n\n` +
+                  `**Информация о заявке:**`
+                )
+                .addFields(
+                  { name: "👤 Покупатель", value: `<@${buyerId}> (\`${interaction.user.tag}\`)`, inline: false },
+                  { name: "🧠 Бреинрот + генерация", value: `\`${brainrotNameGen}\``, inline: false },
+                  { name: "🎮 Roblox информация", value: `\`${robloxInfo}\``, inline: false },
+                  { name: "📦 Свободных слотов", value: `\`${available}/${MAX_NOTIFIER_STOCK}\``, inline: true },
+                  { name: "🆔 ID заявки", value: `\`${requestId}\``, inline: true }
+                )
+                .setColor(BRAINROT_COLOR)
+                .setFooter({ text: "Нажмите ✅ Принять или ❌ Отказать • " + FOOTER_TEXT })
+                .setTimestamp()
+            ],
+            components: [staffRow]
+          });
+          notifiedCount++;
+        } catch {
+          console.log(`⚠️ Could not DM Brainrot staff ${staffUser.tag}`);
+        }
+      }
+
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("✅  Brainrot Request Submitted!")
+            .setDescription(
+              "Your request has been sent to our **Brainrot** staff for review.\n\n" +
+              "You will receive a DM once your request is accepted or declined."
+            )
+            .addFields(
+              { name: "🧠 Brainrot Info", value: `\`${brainrotNameGen}\``, inline: false },
+              { name: "🎮 Roblox Info",   value: `\`${robloxInfo}\``,       inline: false },
+              { name: "📬 Staff Notified", value: `\`${notifiedCount}\` staff member(s)`, inline: true }
+            )
+            .setColor(BRAINROT_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
+    }
+
+    // ===== MODAL: brainrot time selection (staff accepts) =====
+    if (interaction.customId.startsWith("modal_brainrot_time_")) {
+      await interaction.deferReply({ flags: 64 });
+
+      const withoutPrefix  = interaction.customId.slice("modal_brainrot_time_".length);
+      const separatorIndex = withoutPrefix.lastIndexOf("_");
+      const requestId      = withoutPrefix.substring(0, separatorIndex);
+      const buyerId        = withoutPrefix.substring(separatorIndex + 1);
+
+      const timeStr = interaction.fields.getTextInputValue("brainrot_time_input").trim();
+      const totalMs = parseTimeString(timeStr);
+
+      if (!totalMs || totalMs <= 0) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Неверный формат")
+              .setDescription(
+                "Не удалось распознать время. Используй форматы:\n" +
+                "`3d` — 3 дня\n`7d` — 7 дней\n`14d` — 14 дней\n`1d 12h` — 1 день 12 часов\n`6h` — 6 часов"
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const request = await getBrainrotRequest(requestId);
+      if (!request || request.status !== "pending") {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Заявка не найдена")
+              .setDescription("Эта заявка уже была обработана или не существует.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      // Mark as accepted
+      await updateBrainrotRequest(requestId, "accepted", interaction.user.id);
+
+      // Give buyer Notifier role + subscription
+      // Find any available guild
+      let targetGuild = null;
+      for (const [, g] of client.guilds.cache) {
+        try {
+          await g.members.fetch({ user: buyerId, force: true });
+          targetGuild = g;
+          break;
+        } catch { /* continue */ }
+      }
+
+      await addSubscriptionMs(buyerId, totalMs);
+      await giveNotifierRole(buyerId, targetGuild);
+
+      const newExpiry  = new Date(Date.now() + totalMs);
+      const unixExpiry = Math.floor(newExpiry.getTime() / 1000);
+      const timeLabel  = formatDuration(totalMs);
+
+      // Notify buyer in English
+      try {
+        const buyer = await client.users.fetch(buyerId);
+        await buyer.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🎉  Brainrot Payment Accepted!")
+              .setDescription(
+                "Your **Brainrot** payment request has been **accepted** by our staff!\n\n" +
+                `Your **${ROLE_NOTIFIER_ACCESS}** role is now active.`
+              )
+              .addFields(
+                { name: "⏱️ Access Duration", value: `\`${timeLabel}\``,                            inline: true },
+                { name: "📅 Expires",          value: `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)`, inline: false },
+                {
+                  name:  "📝 Next Step",
+                  value: interaction.user
+                    ? `Add **@${interaction.user.username}** in Roblox or join their server!`
+                    : "Contact the staff member for further instructions.",
+                  inline: false
+                }
+              )
+              .setColor(SUCCESS_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      } catch {
+        console.log(`⚠️ Could not DM buyer ${buyerId} about brainrot acceptance`);
+      }
+
+      // Update staff's message
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("✅  Заявка принята!")
+            .setDescription(
+              `Вы выдали **${timeLabel}** нотифаера покупателю <@${buyerId}>.\n\n` +
+              `Роль **${ROLE_NOTIFIER_ACCESS}** и подписка успешно назначены.`
+            )
+            .addFields(
+              { name: "👤 Покупатель", value: `<@${buyerId}>`,      inline: true },
+              { name: "⏱️ Время",      value: `\`${timeLabel}\``,   inline: true },
+              { name: "📅 Истекает",   value: `<t:${unixExpiry}:F>`, inline: false }
+            )
+            .setColor(SUCCESS_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
+    }
+
+    // ===== MODAL: delete key =====
     if (interaction.customId.startsWith("modal_delete_key_")) {
       await interaction.deferReply({ flags: 64 });
 
@@ -3225,18 +3889,12 @@ async function buildKeyListEmbedAndRow(storageId, productId, tierDays, page, per
 
 async function sendKeyListEmbed(interaction, storageId, productId, tierDays, page, perPage) {
   const { embed, row } = await buildKeyListEmbedAndRow(storageId, productId, tierDays, page, perPage);
-  return interaction.editReply({
-    embeds:     [embed],
-    components: row ? [row] : []
-  });
+  return interaction.editReply({ embeds: [embed], components: row ? [row] : [] });
 }
 
 async function sendKeyListEdit(interaction, storageId, productId, tierDays, page, perPage) {
   const { embed, row } = await buildKeyListEmbedAndRow(storageId, productId, tierDays, page, perPage);
-  return interaction.editReply({
-    embeds:     [embed],
-    components: row ? [row] : []
-  });
+  return interaction.editReply({ embeds: [embed], components: row ? [row] : [] });
 }
 
 // ===== LEGACY TEXT COMMAND /test (owner debug only) =====
