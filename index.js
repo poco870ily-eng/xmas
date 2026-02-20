@@ -35,6 +35,7 @@ const OWNER_ID            = process.env.OWNER_ID;
 // В этой гильдии бот:
 //   1) Отвечает ТОЛЬКО в каналах, в названии которых есть "ticket"
 //   2) Показывает ТОЛЬКО Notifier (без Auto Joiner)
+//   3) Использует канал 💎︱10m-inf вместо #no
 const RESTRICTED_GUILD_ID = "1418749872848375962";
 
 // ===== ROLE NAMES =====
@@ -344,6 +345,17 @@ function getAvailableProducts(guildId) {
     );
   }
   return PRODUCTS;
+}
+
+/**
+ * Возвращает название канала Notifier в зависимости от сервера.
+ * Для ограниченной гильдии — 💎︱10m-inf, для остальных — #no
+ */
+function getNotifierChannelName(guildId) {
+  if (guildId === RESTRICTED_GUILD_ID) {
+    return "💎︱10m-inf";
+  }
+  return "#no";
 }
 
 // ===== ROLE HELPERS =====
@@ -857,7 +869,7 @@ const PRODUCTS = {
     id:          "notifier",
     name:        "Notifier",
     emoji:       "🔔",
-    description: "Get access to the #no channel with real-time alerts",
+    description: "Get access to real-time alerts channel",
     isAccess:    true,
     tiers: [
       { days: 3,  price: 20 },
@@ -994,6 +1006,7 @@ async function buildShopEmbed(guildId) {
     .setTimestamp();
 
   const products = getAvailableProducts(guildId);
+  const channelName = getNotifierChannelName(guildId);
 
   for (const [, product] of Object.entries(products)) {
     if (product.isAccess) {
@@ -2180,12 +2193,14 @@ client.on("interactionCreate", async (interaction) => {
           const expiresAt  = sub.data ? new Date(sub.data.expires_at) : null;
           const unixExpiry = expiresAt ? Math.floor(expiresAt.getTime() / 1000) : null;
 
+          const channelName = getNotifierChannelName(interaction.guildId);
+
           await interaction.editReply({
             embeds: [
               new EmbedBuilder()
                 .setTitle("✅  Notifier Access Granted!")
                 .setDescription(
-                  `You now have access to the **#no** channel!\n` +
+                  `You now have access to the **${channelName}** channel!\n` +
                   `The **${ROLE_NOTIFIER_ACCESS}** role has been given to you.`
                 )
                 .addFields(
@@ -2210,7 +2225,7 @@ client.on("interactionCreate", async (interaction) => {
                 new EmbedBuilder()
                   .setTitle("🔔  Notifier Access Confirmation")
                   .setDescription(
-                    `You've purchased **${product.name}** — **${days} day${days > 1 ? "s" : ""}** access to **#no**!\n\n` +
+                    `You've purchased **${product.name}** — **${days} day${days > 1 ? "s" : ""}** access to **${channelName}**!\n\n` +
                     `Your **${ROLE_NOTIFIER_ACCESS}** role is now active.`
                   )
                   .addFields(
@@ -2472,6 +2487,7 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       const product = PRODUCTS[productId];
+      const channelName = getNotifierChannelName(interaction.guildId);
 
       if (product.isAccess) {
         const tierInfo = product.tiers.map(t =>
