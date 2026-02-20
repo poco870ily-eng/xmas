@@ -556,10 +556,11 @@ async function getBrainrotUsers() {
   const users = [];
 
   for (const [, guild] of client.guilds.cache) {
+    // Fetch roles first (same pattern as findNotifierRole)
     try {
-      await guild.members.fetch({ force: true });
+      await guild.roles.fetch();
     } catch (e) {
-      console.error(`❌ Could not fetch members for guild "${guild.name}":`, e.message);
+      console.error(`❌ Could not fetch roles for guild "${guild.name}":`, e.message);
       continue;
     }
 
@@ -568,17 +569,33 @@ async function getBrainrotUsers() {
     );
 
     if (!role) {
-      console.warn(`⚠️ Role "${ROLE_BRAINROT}" not found in guild "${guild.name}"`);
+      console.warn(`⚠️ Role "${ROLE_BRAINROT}" not found in guild "${guild.name}". Available roles: ${guild.roles.cache.map(r => r.name).join(", ")}`);
       continue;
     }
 
-    for (const [, member] of role.members) {
+    console.log(`✅ Found Brainrot role "${role.name}" (${role.id}) in guild "${guild.name}"`);
+
+    // Fetch members with this role
+    try {
+      await guild.members.fetch({ force: true });
+    } catch (e) {
+      console.error(`❌ Could not fetch members for guild "${guild.name}":`, e.message);
+      continue;
+    }
+
+    // Re-fetch role members after member fetch
+    const freshRole = guild.roles.cache.get(role.id);
+    if (!freshRole) continue;
+
+    for (const [, member] of freshRole.members) {
       if (seen.has(member.id)) continue;
       seen.add(member.id);
       users.push(member.user);
+      console.log(`👤 Brainrot staff found: ${member.user.tag}`);
     }
   }
 
+  console.log(`📊 Total Brainrot staff found: ${users.length}`);
   return users;
 }
 
@@ -2115,26 +2132,12 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // ===== /changetime — FIXED: show modal immediately, validate in modal submit =====
+    // ===== /changetime — show modal IMMEDIATELY (no async before showModal) =====
     if (commandName === "changetime") {
-      const accessTier = await getAccessTier(interaction.user.id);
-      if (!accessTier) {
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⛔  Access Denied")
-              .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ],
-          ephemeral: true
-        });
-      }
-
+      // NOTE: We do NOT call getAccessTier() here because it makes Discord API calls
+      // that can exceed the 3-second timeout. Access check is done in modal submit handler.
       const targetUser = interaction.options.getUser("user");
 
-      // Show modal immediately to avoid 3-second timeout
-      // Subscription validation is done inside the modal submit handler
       const modal = new ModalBuilder()
         .setCustomId(`modal_changetime_${targetUser.id}`)
         .setTitle(`Set Time — ${targetUser.username}`);
@@ -3405,6 +3408,20 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.customId.startsWith("modal_changetime_")) {
       await interaction.deferReply({ flags: 64 });
 
+      // Access check is done here (after deferReply so no timeout)
+      const accessTier = await getAccessTier(interaction.user.id);
+      if (!accessTier) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
       const targetUserId = interaction.customId.slice("modal_changetime_".length);
       const timeStr      = interaction.fields.getTextInputValue("changetime_input").trim();
       const totalMs      = parseTimeString(timeStr);
@@ -3424,61 +3441,34 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Validate subscription in modal submit (not before showing modal)
-      const sub = await getSubscription(targetUserId);
-      if (!sub) {
-        // Try to insert subscription if not exists (for new users)
-        const { data: rawSub } = await supabase
-          .from("subscriptions")
-          .select("expires_at")
-          .eq("user_id", targetUserId)
-          .single();
-
-        if (!rawSub) {
-          return interaction.editReply({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("❌  No Subscription Found")
-                .setDescription(
-                  `<@${targetUserId}> doesn't have a Notifier subscription in the database.\n\n` +
-                  `Use \`/ban\` first to clear, then they need to purchase access with \`/buy\`.`
-                )
-                .setColor(ERROR_COLOR)
-                .setFooter({ text: FOOTER_TEXT })
-            ]
-          });
-        }
-      }
-
-      const success = await setSubscriptionExpiry(targetUserId, totalMs);
-
-      if (!success) {
-        // Subscription row may not exist — create it
-        const newExpiry = new Date(Date.now() + totalMs);
-        const { error: insertError } = await supabase
-          .from("subscriptions")
-          .upsert({ user_id: targetUserId, expires_at: newExpiry.toISOString() });
-
-        if (insertError) {
-          return interaction.editReply({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("❌  Database Error")
-                .setDescription("Failed to update subscription time. Check server logs.")
-                .setColor(ERROR_COLOR)
-                .setFooter({ text: FOOTER_TEXT })
-            ]
-          });
-        }
-      }
-
       const newExpiry  = new Date(Date.now() + totalMs);
       const unixExpiry = Math.floor(newExpiry.getTime() / 1000);
       const timeLabel  = formatDuration(totalMs);
 
-      let targetUser;
+      // Upsert: create or update subscription regardless of current state
+      const { error: upsertError } = await supabase
+        .from("subscriptions")
+        .upsert(
+          { user_id: targetUserId.toString(), expires_at: newExpiry.toISOString() },
+          { onConflict: "user_id" }
+        );
+
+      if (upsertError) {
+        console.error("❌ changetime upsert error:", upsertError.message);
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Database Error")
+              .setDescription(`Failed to update subscription time.\n\`${upsertError.message}\``)
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      // DM the target user
       try {
-        targetUser = await client.users.fetch(targetUserId);
+        const targetUser = await client.users.fetch(targetUserId);
         await targetUser.send({
           embeds: [
             new EmbedBuilder()
