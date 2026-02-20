@@ -388,8 +388,10 @@ async function getNotifierCurrentCount() {
       r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_NOTIFIER_ACCESS)
     );
     if (!role) continue;
-    for (const [, member] of role.members) {
-      seen.add(member.id);
+    for (const [, member] of guild.members.cache) {
+      if (member.roles.cache.has(role.id)) {
+        seen.add(member.id);
+      }
     }
   }
   return seen.size;
@@ -540,7 +542,8 @@ async function getAccessPlusUsers() {
       continue;
     }
 
-    for (const [, member] of role.members) {
+    for (const [, member] of guild.members.cache) {
+      if (!member.roles.cache.has(role.id)) continue;
       if (seen.has(member.id)) continue;
       seen.add(member.id);
       users.push(member.user);
@@ -550,13 +553,13 @@ async function getAccessPlusUsers() {
   return users;
 }
 
-// ===== BRAINROT ROLE HELPERS =====
+// ===== BRAINROT ROLE HELPERS (FIXED) =====
 async function getBrainrotUsers() {
   const seen  = new Set();
   const users = [];
 
   for (const [, guild] of client.guilds.cache) {
-    // Fetch roles first (same pattern as findNotifierRole)
+    // Step 1: fetch all roles
     try {
       await guild.roles.fetch();
     } catch (e) {
@@ -564,18 +567,22 @@ async function getBrainrotUsers() {
       continue;
     }
 
+    // Find the Brainrot role
     const role = guild.roles.cache.find(
       r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_BRAINROT)
     );
 
     if (!role) {
-      console.warn(`⚠️ Role "${ROLE_BRAINROT}" not found in guild "${guild.name}". Available roles: ${guild.roles.cache.map(r => r.name).join(", ")}`);
+      console.warn(
+        `⚠️ Role "${ROLE_BRAINROT}" not found in guild "${guild.name}". ` +
+        `Available roles: ${guild.roles.cache.map(r => r.name).join(", ")}`
+      );
       continue;
     }
 
     console.log(`✅ Found Brainrot role "${role.name}" (${role.id}) in guild "${guild.name}"`);
 
-    // Fetch members with this role
+    // Step 2: fetch ALL members so the cache is fully populated
     try {
       await guild.members.fetch({ force: true });
     } catch (e) {
@@ -583,11 +590,10 @@ async function getBrainrotUsers() {
       continue;
     }
 
-    // Re-fetch role members after member fetch
-    const freshRole = guild.roles.cache.get(role.id);
-    if (!freshRole) continue;
-
-    for (const [, member] of freshRole.members) {
+    // Step 3: iterate guild.members.cache directly and check role membership
+    // (role.members may be stale; members.cache is always up-to-date after fetch)
+    for (const [, member] of guild.members.cache) {
+      if (!member.roles.cache.has(role.id)) continue;
       if (seen.has(member.id)) continue;
       seen.add(member.id);
       users.push(member.user);
@@ -1813,7 +1819,6 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Build file content
       const fileContent =
         `Nameless Paysystem — Balance Coupons\n` +
         `======================================\n` +
@@ -2132,25 +2137,43 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // ===== /changetime — show modal IMMEDIATELY (no async before showModal) =====
+    // ===== /changetime — FIXED: showModal called immediately, no async before it =====
     if (commandName === "changetime") {
-      // NOTE: We do NOT call getAccessTier() here because it makes Discord API calls
-      // that can exceed the 3-second timeout. Access check is done in modal submit handler.
-      const targetUser = interaction.options.getUser("user");
+      try {
+        const targetUser = interaction.options.getUser("user");
 
-      const modal = new ModalBuilder()
-        .setCustomId(`modal_changetime_${targetUser.id}`)
-        .setTitle(`Set Time — ${targetUser.username}`);
+        const modal = new ModalBuilder()
+          .setCustomId(`modal_changetime_${targetUser.id}`)
+          .setTitle(`Set Time — ${targetUser.username}`);
 
-      const input = new TextInputBuilder()
-        .setCustomId("changetime_input")
-        .setLabel("New time from NOW (e.g. 7d / 3h / 1d 12h / 30m)")
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder("Examples: 7d  |  3h  |  1d 12h  |  30m  |  2d 6h 30m")
-        .setRequired(true);
+        const input = new TextInputBuilder()
+          .setCustomId("changetime_input")
+          .setLabel("New time from NOW (e.g. 7d / 3h / 1d 12h / 30m)")
+          .setStyle(TextInputStyle.Short)
+          .setPlaceholder("Examples: 7d  |  3h  |  1d 12h  |  30m  |  2d 6h 30m")
+          .setRequired(true);
 
-      modal.addComponents(new ActionRowBuilder().addComponents(input));
-      return interaction.showModal(modal);
+        modal.addComponents(new ActionRowBuilder().addComponents(input));
+        return await interaction.showModal(modal);
+      } catch (err) {
+        console.error("❌ /changetime showModal error:", err.message);
+        // If modal failed, try to reply with an error
+        try {
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({
+              embeds: [
+                new EmbedBuilder()
+                  .setTitle("❌  Error")
+                  .setDescription("Failed to open the dialog. Please try again.")
+                  .setColor(ERROR_COLOR)
+                  .setFooter({ text: FOOTER_TEXT })
+              ],
+              ephemeral: true
+            });
+          }
+        } catch { /* ignore */ }
+      }
+      return;
     }
 
     // ===== /pause =====
@@ -2531,17 +2554,12 @@ client.on("interactionCreate", async (interaction) => {
           rolePlus  = guild.roles.cache.find(r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_ACCESS_PLUS));
         }
 
-        if (rolePlus) {
-          for (const [, member] of rolePlus.members) {
-            if (seen.has(member.id)) continue;
+        for (const [, member] of guild.members.cache) {
+          if (seen.has(member.id)) continue;
+          if (rolePlus && member.roles.cache.has(rolePlus.id)) {
             seen.add(member.id);
             plusUsers.push({ tag: member.user.tag, id: member.id, guild: guild.name });
-          }
-        }
-
-        if (roleBasic) {
-          for (const [, member] of roleBasic.members) {
-            if (seen.has(member.id)) continue;
+          } else if (roleBasic && member.roles.cache.has(roleBasic.id)) {
             seen.add(member.id);
             basicUsers.push({ tag: member.user.tag, id: member.id, guild: guild.name });
           }
@@ -2714,7 +2732,6 @@ client.on("interactionCreate", async (interaction) => {
 
     // ── Brainrot staff: Accept ──
     if (interaction.customId.startsWith("brainrot_accept_")) {
-      // customId: brainrot_accept_{requestId}_{buyerId}
       const withoutPrefix  = interaction.customId.slice("brainrot_accept_".length);
       const separatorIndex = withoutPrefix.lastIndexOf("_");
       const requestId      = withoutPrefix.substring(0, separatorIndex);
@@ -2735,7 +2752,6 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Show modal to choose time
       const modal = new ModalBuilder()
         .setCustomId(`modal_brainrot_time_${requestId}_${buyerId}`)
         .setTitle("⏰ Сколько времени выдать?");
@@ -2772,7 +2788,6 @@ client.on("interactionCreate", async (interaction) => {
 
       await updateBrainrotRequest(requestId, "declined", interaction.user.id);
 
-      // Notify buyer
       try {
         const buyer = await client.users.fetch(buyerId);
         await buyer.send({
@@ -2792,7 +2807,6 @@ client.on("interactionCreate", async (interaction) => {
         console.log(`⚠️ Could not DM buyer ${buyerId} about brainrot decline`);
       }
 
-      // Update staff DM message
       try {
         await interaction.update({
           embeds: [
@@ -3188,7 +3202,6 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // ── BRAINROTS payment method ──
       if (method === "brainrots") {
         const brainrotRow = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
@@ -3204,7 +3217,6 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (method === "balance") {
-        // ── RESTRICTED GUILD: пропускаем выбор продукта, сразу Notifier ──
         if (interaction.guildId === RESTRICTED_GUILD_ID) {
           const product  = PRODUCTS["notifier"];
           const currentCount = await getNotifierCurrentCount();
@@ -3252,7 +3264,6 @@ client.on("interactionCreate", async (interaction) => {
           return interaction.update({ embeds: [embed], components: row ? [row] : [] });
         }
 
-        // Обычный сервер
         const embed = await buildShopEmbed(interaction.guildId);
         return interaction.update({
           embeds: [embed],
@@ -3404,107 +3415,128 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // ===== MODAL: changetime (FIXED) =====
+    // ===== MODAL: changetime — FIXED with try/catch =====
     if (interaction.customId.startsWith("modal_changetime_")) {
-      await interaction.deferReply({ flags: 64 });
-
-      // Access check is done here (after deferReply so no timeout)
-      const accessTier = await getAccessTier(interaction.user.id);
-      if (!accessTier) {
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⛔  Access Denied")
-              .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        });
-      }
-
-      const targetUserId = interaction.customId.slice("modal_changetime_".length);
-      const timeStr      = interaction.fields.getTextInputValue("changetime_input").trim();
-      const totalMs      = parseTimeString(timeStr);
-
-      if (!totalMs || totalMs <= 0) {
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  Invalid Format")
-              .setDescription(
-                "Could not parse the time. Use formats like:\n" +
-                "`7d` — 7 days\n`3h` — 3 hours\n`30m` — 30 minutes\n`1d 12h` — 1 day 12 hours\n`2d 6h 30m` — 2 days 6 hours 30 minutes"
-              )
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        });
-      }
-
-      const newExpiry  = new Date(Date.now() + totalMs);
-      const unixExpiry = Math.floor(newExpiry.getTime() / 1000);
-      const timeLabel  = formatDuration(totalMs);
-
-      // Upsert: create or update subscription regardless of current state
-      const { error: upsertError } = await supabase
-        .from("subscriptions")
-        .upsert(
-          { user_id: targetUserId.toString(), expires_at: newExpiry.toISOString() },
-          { onConflict: "user_id" }
-        );
-
-      if (upsertError) {
-        console.error("❌ changetime upsert error:", upsertError.message);
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  Database Error")
-              .setDescription(`Failed to update subscription time.\n\`${upsertError.message}\``)
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        });
-      }
-
-      // DM the target user
       try {
-        const targetUser = await client.users.fetch(targetUserId);
-        await targetUser.send({
+        await interaction.deferReply({ flags: 64 });
+
+        // Access check happens AFTER deferReply so no timeout risk
+        const accessTier = await getAccessTier(interaction.user.id);
+        if (!accessTier) {
+          return interaction.editReply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("⛔  Access Denied")
+                .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
+                .setColor(ERROR_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+            ]
+          });
+        }
+
+        const targetUserId = interaction.customId.slice("modal_changetime_".length);
+        const timeStr      = interaction.fields.getTextInputValue("changetime_input").trim();
+        const totalMs      = parseTimeString(timeStr);
+
+        if (!totalMs || totalMs <= 0) {
+          return interaction.editReply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("❌  Invalid Format")
+                .setDescription(
+                  "Could not parse the time. Use formats like:\n" +
+                  "`7d` — 7 days\n`3h` — 3 hours\n`30m` — 30 minutes\n`1d 12h` — 1 day 12 hours\n`2d 6h 30m` — 2 days 6 hours 30 minutes"
+                )
+                .setColor(ERROR_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+            ]
+          });
+        }
+
+        const newExpiry  = new Date(Date.now() + totalMs);
+        const unixExpiry = Math.floor(newExpiry.getTime() / 1000);
+        const timeLabel  = formatDuration(totalMs);
+
+        // Upsert: create or update subscription regardless of current state
+        const { error: upsertError } = await supabase
+          .from("subscriptions")
+          .upsert(
+            { user_id: targetUserId.toString(), expires_at: newExpiry.toISOString() },
+            { onConflict: "user_id" }
+          );
+
+        if (upsertError) {
+          console.error("❌ changetime upsert error:", upsertError.message);
+          return interaction.editReply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("❌  Database Error")
+                .setDescription(`Failed to update subscription time.\n\`${upsertError.message}\``)
+                .setColor(ERROR_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+            ]
+          });
+        }
+
+        // DM the target user
+        try {
+          const targetUser = await client.users.fetch(targetUserId);
+          await targetUser.send({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("🕐  Subscription Time Updated")
+                .setDescription(
+                  `An administrator has set your Notifier subscription to **${timeLabel}** from now.`
+                )
+                .addFields(
+                  { name: "⏱️ New Duration", value: `\`${timeLabel}\``,    inline: true },
+                  { name: "📅 Expires",      value: `<t:${unixExpiry}:F>`, inline: true }
+                )
+                .setColor(ACCESS_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+                .setTimestamp()
+            ]
+          });
+        } catch {
+          console.log(`⚠️ Could not DM ${targetUserId} about changetime`);
+        }
+
+        return interaction.editReply({
           embeds: [
             new EmbedBuilder()
-              .setTitle("🕐  Subscription Time Updated")
-              .setDescription(
-                `An administrator has set your Notifier subscription to **${timeLabel}** from now.`
-              )
+              .setTitle("🕐  Time Set Successfully")
+              .setDescription(`<@${targetUserId}>'s subscription has been set to **${timeLabel}** from now.`)
               .addFields(
-                { name: "⏱️ New Duration", value: `\`${timeLabel}\``,    inline: true },
-                { name: "📅 Expires",      value: `<t:${unixExpiry}:F>`, inline: true }
+                { name: "👤 Target User", value: `<@${targetUserId}>`,                            inline: true  },
+                { name: "⏱️ New Time",    value: `\`${timeLabel}\``,                              inline: true  },
+                { name: "📅 Expires",     value: `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)`,    inline: false },
+                { name: "🛠️ By",         value: `<@${interaction.user.id}>`,                     inline: true  }
               )
-              .setColor(ACCESS_COLOR)
+              .setColor(SUCCESS_COLOR)
               .setFooter({ text: FOOTER_TEXT })
               .setTimestamp()
           ]
         });
-      } catch {
-        console.log(`⚠️ Could not DM ${targetUserId} about changetime`);
+      } catch (err) {
+        console.error("❌ modal_changetime_ error:", err.message);
+        try {
+          const reply = {
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("❌  Unexpected Error")
+                .setDescription(`\`${err.message}\`\nPlease try again.`)
+                .setColor(ERROR_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+            ]
+          };
+          if (interaction.deferred) {
+            await interaction.editReply(reply);
+          } else {
+            await interaction.reply({ ...reply, ephemeral: true });
+          }
+        } catch { /* ignore */ }
       }
-
-      return interaction.editReply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle("🕐  Time Set Successfully")
-            .setDescription(`<@${targetUserId}>'s subscription has been set to **${timeLabel}** from now.`)
-            .addFields(
-              { name: "👤 Target User", value: `<@${targetUserId}>`,                            inline: true  },
-              { name: "⏱️ New Time",    value: `\`${timeLabel}\``,                              inline: true  },
-              { name: "📅 Expires",     value: `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)`,    inline: false },
-              { name: "🛠️ By",         value: `<@${interaction.user.id}>`,                     inline: true  }
-            )
-            .setColor(SUCCESS_COLOR)
-            .setFooter({ text: FOOTER_TEXT })
-            .setTimestamp()
-        ]
-      });
+      return;
     }
 
     // ===== MODAL: brainrot request submission =====
@@ -3515,7 +3547,6 @@ client.on("interactionCreate", async (interaction) => {
       const robloxInfo      = interaction.fields.getTextInputValue("roblox_info").trim();
       const buyerId         = interaction.user.id;
 
-      // Check Notifier stock
       const currentCount = await getNotifierCurrentCount();
       const available    = MAX_NOTIFIER_STOCK - currentCount;
 
@@ -3535,7 +3566,6 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Save request to DB
       const requestId = await createBrainrotRequest(buyerId, brainrotNameGen, robloxInfo);
 
       if (!requestId) {
@@ -3550,7 +3580,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Get Brainrot role members and DM them in Russian
+      // Get Brainrot staff using the FIXED function
       const brainrotUsers = await getBrainrotUsers();
 
       if (brainrotUsers.length === 0) {
@@ -3569,7 +3599,6 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Build buttons for staff DM
       const acceptButton = new ButtonBuilder()
         .setCustomId(`brainrot_accept_${requestId}_${buyerId}`)
         .setLabel("✅ Принять")
@@ -3582,7 +3611,6 @@ client.on("interactionCreate", async (interaction) => {
 
       const staffRow = new ActionRowBuilder().addComponents(acceptButton, declineButton);
 
-      // DM all Brainrot staff in Russian
       let notifiedCount = 0;
       for (const staffUser of brainrotUsers) {
         try {
@@ -3608,8 +3636,9 @@ client.on("interactionCreate", async (interaction) => {
             components: [staffRow]
           });
           notifiedCount++;
-        } catch {
-          console.log(`⚠️ Could not DM Brainrot staff ${staffUser.tag}`);
+          console.log(`✅ Notified Brainrot staff: ${staffUser.tag}`);
+        } catch (dmErr) {
+          console.log(`⚠️ Could not DM Brainrot staff ${staffUser.tag}:`, dmErr.message);
         }
       }
 
@@ -3673,11 +3702,8 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Mark as accepted
       await updateBrainrotRequest(requestId, "accepted", interaction.user.id);
 
-      // Give buyer Notifier role + subscription
-      // Find any available guild
       let targetGuild = null;
       for (const [, g] of client.guilds.cache) {
         try {
@@ -3694,7 +3720,6 @@ client.on("interactionCreate", async (interaction) => {
       const unixExpiry = Math.floor(newExpiry.getTime() / 1000);
       const timeLabel  = formatDuration(totalMs);
 
-      // Notify buyer in English
       try {
         const buyer = await client.users.fetch(buyerId);
         await buyer.send({
@@ -3725,7 +3750,6 @@ client.on("interactionCreate", async (interaction) => {
         console.log(`⚠️ Could not DM buyer ${buyerId} about brainrot acceptance`);
       }
 
-      // Update staff's message
       return interaction.editReply({
         embeds: [
           new EmbedBuilder()
