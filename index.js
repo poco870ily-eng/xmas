@@ -30,12 +30,17 @@ const PORT                = process.env.PORT || 3000;
 const SUPABASE_URL        = process.env.SUPABASE_URL;
 const SUPABASE_KEY        = process.env.SUPABASE_KEY;
 const OWNER_ID            = process.env.OWNER_ID;
-// GUILD_ID удалён — команды регистрируются для всех серверов динамически
+
+// ===== RESTRICTED GUILD SETTINGS =====
+// В этой гильдии бот:
+//   1) Отвечает ТОЛЬКО в каналах, в названии которых есть "ticket"
+//   2) Показывает ТОЛЬКО Notifier (без Auto Joiner)
+const RESTRICTED_GUILD_ID = "1418749872848375962";
 
 // ===== ROLE NAMES =====
 const ROLE_ACCESS           = "Pay Access";
 const ROLE_ACCESS_PLUS      = "Pay Access+";
-const ROLE_NOTIFIER_ACCESS  = "Access"; // Role given to Notifier buyers
+const ROLE_NOTIFIER_ACCESS  = "Access";
 
 // ===== (ОПЦИОНАЛЬНО) ROLE IDs =====
 const USE_ROLE_IDS        = false;
@@ -275,18 +280,16 @@ process.on("unhandledRejection", (err) => {
   console.error("❌ Unhandled rejection:", err?.message || err);
 });
 
-// ===== REGISTER COMMANDS GLOBALLY (один раз — работает на всех серверах) =====
+// ===== REGISTER COMMANDS GLOBALLY =====
 async function registerGlobalCommands() {
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
   try {
-    // Очищаем guild-команды на всех серверах, чтобы убрать дубли
     for (const [guildId] of client.guilds.cache) {
       try {
         await rest.put(Routes.applicationGuildCommands(CLIENT_ID, guildId), { body: [] });
         console.log(`🧹 Очищены guild-команды для сервера ${guildId}`);
       } catch { /* игнорируем */ }
     }
-    // Регистрируем глобально — Discord автоматически раздаёт на все серверы
     await rest.put(Routes.applicationCommands(CLIENT_ID), { body: SLASH_COMMANDS });
     console.log("✅ Slash-команды зарегистрированы глобально");
   } catch (err) {
@@ -306,15 +309,42 @@ client.once("ready", async () => {
     status: "online"
   });
 
-  // Запуск проверки истёкших подписок (каждые 5 минут)
   setInterval(checkExpiredSubscriptions, 5 * 60 * 1000);
   checkExpiredSubscriptions();
 });
 
-// Новые серверы получают глобальные команды автоматически
 client.on("guildCreate", (guild) => {
   console.log(`➕ Бот добавлен на новый сервер: "${guild.name}" (${guild.id})`);
 });
+
+// ===== CHANNEL RESTRICTION HELPERS =====
+
+/**
+ * Проверяет, разрешено ли взаимодействие в данном контексте.
+ * Для RESTRICTED_GUILD_ID — только каналы с "ticket" в названии.
+ */
+function isAllowedChannel(interaction) {
+  // DM (нет гильдии) — всегда разрешены
+  if (!interaction.guildId) return true;
+  // Другие серверы — без ограничений
+  if (interaction.guildId !== RESTRICTED_GUILD_ID) return true;
+  // Ограниченный сервер: канал должен содержать "ticket"
+  const channelName = interaction.channel?.name?.toLowerCase() ?? "";
+  return channelName.includes("ticket");
+}
+
+/**
+ * Возвращает список продуктов с учётом гильдии.
+ * В ограниченной гильдии — только Notifier.
+ */
+function getAvailableProducts(guildId) {
+  if (guildId === RESTRICTED_GUILD_ID) {
+    return Object.fromEntries(
+      Object.entries(PRODUCTS).filter(([id]) => id === "notifier")
+    );
+  }
+  return PRODUCTS;
+}
 
 // ===== ROLE HELPERS =====
 
@@ -954,7 +984,8 @@ function buildBalanceEmbed(userId, balance, username) {
     .setTimestamp();
 }
 
-async function buildShopEmbed() {
+// guildId передаётся для фильтрации продуктов в ограниченной гильдии
+async function buildShopEmbed(guildId) {
   const embed = new EmbedBuilder()
     .setTitle("🛒  Product Shop")
     .setDescription("Select a product to view pricing and purchase options.")
@@ -962,7 +993,9 @@ async function buildShopEmbed() {
     .setFooter({ text: FOOTER_TEXT })
     .setTimestamp();
 
-  for (const [, product] of Object.entries(PRODUCTS)) {
+  const products = getAvailableProducts(guildId);
+
+  for (const [, product] of Object.entries(products)) {
     if (product.isAccess) {
       const tierInfo = product.tiers.map(t =>
         `**${t.days} day${t.days > 1 ? "s" : ""}** — **$${t.price}**  🔔 Role access`
@@ -1154,8 +1187,10 @@ function buildCurrencyMenu(customId = "select_currency") {
   );
 }
 
-function buildProductMenu() {
-  const options = Object.entries(PRODUCTS).map(([id, product]) =>
+// guildId передаётся для фильтрации продуктов в ограниченной гильдии
+function buildProductMenu(guildId) {
+  const products = getAvailableProducts(guildId);
+  const options = Object.entries(products).map(([id, product]) =>
     new StringSelectMenuOptionBuilder()
       .setLabel(product.name)
       .setDescription(product.description)
@@ -1240,6 +1275,27 @@ const pendingPayments = new Map();
 // ===== INTERACTION HANDLER =====
 client.on("interactionCreate", async (interaction) => {
 
+  // ──────────── CHANNEL RESTRICTION CHECK ────────────
+  // Для гильдии RESTRICTED_GUILD_ID — только каналы с "ticket" в названии.
+  // Проверяется ДО любой другой логики.
+  if (!isAllowedChannel(interaction)) {
+    try {
+      if (interaction.isRepliable()) {
+        await interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🎫  Ticket-Only")
+              .setDescription("This bot can only be used inside **ticket** channels on this server.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+    } catch { /* игнорируем */ }
+    return;
+  }
+
   // ──────────── SLASH COMMANDS ────────────
   if (interaction.isChatInputCommand()) {
     const { commandName } = interaction;
@@ -1296,8 +1352,8 @@ client.on("interactionCreate", async (interaction) => {
             .setTitle("⏰  Notifier Subscription Status")
             .setDescription(`Your **Notifier** access is active!`)
             .addFields(
-              { name: "⏱️ Time Remaining", value: `\`${timeLeft}\``,                    inline: true },
-              { name: "📅 Expires",        value: `<t:${unixExpiry}:F>`,                inline: true },
+              { name: "⏱️ Time Remaining", value: `\`${timeLeft}\``,                         inline: true },
+              { name: "📅 Expires",        value: `<t:${unixExpiry}:F>`,                     inline: true },
               { name: "🔔 Status",         value: `**Active** — ${ROLE_NOTIFIER_ACCESS} role`, inline: false }
             )
             .setColor(ACCESS_COLOR)
@@ -1539,7 +1595,7 @@ client.on("interactionCreate", async (interaction) => {
                 `An administrator has added **+${label}** to your Notifier subscription!`
               )
               .addFields(
-                { name: "⏱️ Time Added",  value: `\`+${label}\``,                           inline: true },
+                { name: "⏱️ Time Added",  value: `\`+${label}\``,                               inline: true },
                 { name: "📅 New Expiry",  value: unixExpiry ? `<t:${unixExpiry}:F>` : "Unknown", inline: true }
               )
               .setColor(SUCCESS_COLOR)
@@ -1557,10 +1613,10 @@ client.on("interactionCreate", async (interaction) => {
             .setTitle("⏰  Time Added Successfully")
             .setDescription(`Added **+${label}** to <@${targetUser.id}>'s Notifier subscription.`)
             .addFields(
-              { name: "👤 Target User", value: `<@${targetUser.id}> (\`${targetUser.tag}\`)`, inline: true },
-              { name: "⏱️ Time Added",  value: `\`+${label}\``,                              inline: true },
-              { name: "📅 New Expiry",  value: unixExpiry ? `<t:${unixExpiry}:F>` : "Unknown", inline: false },
-              { name: "🛠️ By",         value: `<@${interaction.user.id}>`,                   inline: true }
+              { name: "👤 Target User", value: `<@${targetUser.id}> (\`${targetUser.tag}\`)`,    inline: true  },
+              { name: "⏱️ Time Added",  value: `\`+${label}\``,                                  inline: true  },
+              { name: "📅 New Expiry",  value: unixExpiry ? `<t:${unixExpiry}:F>` : "Unknown",   inline: false },
+              { name: "🛠️ By",         value: `<@${interaction.user.id}>`,                       inline: true  }
             )
             .setColor(SUCCESS_COLOR)
             .setFooter({ text: FOOTER_TEXT })
@@ -2035,6 +2091,20 @@ client.on("interactionCreate", async (interaction) => {
 
         console.log(`📦 Parsed → productId: "${productId}", days: ${days}`);
 
+        // Проверяем доступность продукта в этой гильдии
+        const availableProducts = getAvailableProducts(interaction.guildId);
+        if (!availableProducts[productId]) {
+          return interaction.editReply({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("❌  Product Not Available")
+                .setDescription(`This product is not available on this server.`)
+                .setColor(ERROR_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+            ]
+          });
+        }
+
         const product = PRODUCTS[productId];
 
         if (!product) {
@@ -2374,17 +2444,34 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (method === "balance") {
-        const embed = await buildShopEmbed();
+        // Передаём guildId — в ограниченной гильдии покажет только Notifier
+        const embed = await buildShopEmbed(interaction.guildId);
         return interaction.update({
           embeds: [embed],
-          components: [buildProductMenu()]
+          components: [buildProductMenu(interaction.guildId)]
         });
       }
     }
 
     if (interaction.customId === "select_product") {
       const productId = interaction.values[0];
-      const product   = PRODUCTS[productId];
+
+      // Проверяем доступность продукта в этой гильдии
+      const availableProducts = getAvailableProducts(interaction.guildId);
+      if (!availableProducts[productId]) {
+        return interaction.update({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Product Not Available")
+              .setDescription(`This product is not available on this server.`)
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          components: []
+        });
+      }
+
+      const product = PRODUCTS[productId];
 
       if (product.isAccess) {
         const tierInfo = product.tiers.map(t =>
@@ -2566,9 +2653,9 @@ client.on("interactionCreate", async (interaction) => {
             .setTitle("🗑️  Key Deleted")
             .setDescription(`Key **#${keyNumber}** has been permanently removed from **${product.name}${tierLabel}**.`)
             .addFields(
-              { name: "🔑 Deleted Key",      value: `\`${keyRecord.key_value.substring(0, 30)}...\``, inline: false },
-              { name: "📦 Remaining Stock",  value: `\`${newStock}\` keys available`,                inline: true  },
-              { name: "🛠️ Deleted By",       value: `<@${interaction.user.id}>`,                    inline: true  }
+              { name: "🔑 Deleted Key",     value: `\`${keyRecord.key_value.substring(0, 30)}...\``, inline: false },
+              { name: "📦 Remaining Stock", value: `\`${newStock}\` keys available`,                 inline: true  },
+              { name: "🛠️ Deleted By",      value: `<@${interaction.user.id}>`,                     inline: true  }
             )
             .setColor(ERROR_COLOR)
             .setFooter({ text: FOOTER_TEXT })
@@ -2826,7 +2913,7 @@ app.post("/webhook", async (req, res) => {
 
       if (["confirming", "confirmed"].includes(status)) {
         embed.addFields(
-          { name: "💵  Amount",   value: `\`${amount} USD\``,  inline: true },
+          { name: "💵  Amount",   value: `\`${amount} USD\``,   inline: true },
           { name: "🪙  Currency", value: `\`${pay_currency}\``, inline: true }
         );
       }
