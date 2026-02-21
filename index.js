@@ -2797,45 +2797,70 @@ client.on("interactionCreate", async (interaction) => {
       offer.receiverId = interaction.user.id;
       brainrotOffers.set(offerId, offer);
 
-      // ── SECOND GUILD: receiver chooses a key tier (or declines) ──
+      // ── SECOND GUILD: notify buyer + show "received / not received" to receiver ──
       if (offer.guildId === SECOND_GUILD_ID) {
-        const ajProduct = PRODUCTS["auto_joiner"];
-        const tierButtons = await Promise.all(
-          ajProduct.tiers.map(async t => {
-            const stock = await getAvailableKeyCount(resolveStorageId("auto_joiner", t.days));
-            return new ButtonBuilder()
-              .setCustomId(`brainrot_givekey_${offerId}_${t.days}`)
-              .setLabel(`${t.days} Day${t.days > 1 ? "s" : ""} Key (${stock} in stock)`)
-              .setStyle(stock > 0 ? ButtonStyle.Success : ButtonStyle.Secondary)
-              .setEmoji("🔑")
-              .setDisabled(stock === 0);
-          })
+        const isServer = isPrivateServer(offer.contactInfo);
+
+        // 1. Notify buyer that receiver accepted
+        try {
+          const buyer = await client.users.fetch(offer.buyerId);
+          await buyer.send({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("🤝  Receiver Accepted Your Offer!")
+                .setDescription(
+                  `A receiver has accepted your brainrot offer.\n` +
+                  `**Wait while they verify the trade on their end.**`
+                )
+                .addFields(
+                  { name: "🐸 Brainrot",  value: `\`${offer.brainrotInfo}\``, inline: true },
+                  { name: "🆔 Offer ID",  value: `\`${offerId}\``,            inline: true }
+                )
+                .setColor(BRAINROT_COLOR)
+                .setFooter({ text: `Waiting for receiver confirmation • ${FOOTER_TEXT}` })
+                .setTimestamp()
+            ]
+          });
+        } catch {
+          console.log(`⚠️ Could not DM buyer ${offer.buyerId} about receiver accept`);
+        }
+
+        // 2. Show receiver the trade details + "I received / I didn't receive" buttons
+        const receivedRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`brainrot_gotit_${offerId}`)
+            .setLabel("✅ Я получил брейнрота")
+            .setStyle(ButtonStyle.Success)
+            .setEmoji("🐸"),
+          new ButtonBuilder()
+            .setCustomId(`brainrot_notgot_${offerId}`)
+            .setLabel("❌ Я не получил")
+            .setStyle(ButtonStyle.Danger)
+            .setEmoji("🚫")
         );
 
-        const declineBtn = new ButtonBuilder()
-          .setCustomId(`brainrot_keydecline_${offerId}`)
-          .setLabel("❌ Отклонить")
-          .setStyle(ButtonStyle.Danger)
-          .setEmoji("🚫");
-
-        const keyRow = new ActionRowBuilder().addComponents(...tierButtons, declineBtn);
-
-        const isServer = isPrivateServer(offer.contactInfo);
-        const confirmEmbed = new EmbedBuilder()
-          .setTitle("🔑  Выберите ключ для выдачи")
+        const tradeEmbed = new EmbedBuilder()
+          .setTitle("🐸  Детали сделки")
           .setDescription(
-            `Покупатель: <@${offer.buyerId}>\n` +
-            `Брейнрот: \`${offer.brainrotInfo}\`\n` +
-            (isServer
-              ? `🔗 [Приватный сервер](${offer.contactInfo})`
-              : `👤 Ник: \`${offer.contactInfo}\``) +
-            `\n\nВыберите тир ключа Auto Joiner для выдачи или отклоните:`
+            `Покупатель: <@${offer.buyerId}>\n\n` +
+            `Проверьте, пришёл ли брейнрот, затем нажмите кнопку ниже.`
+          )
+          .addFields(
+            { name: "🎮 Брейнрот",
+              value: `\`${offer.brainrotInfo}\``,
+              inline: false
+            },
+            {
+              name:  isServer ? "🔗 Приватный сервер" : "👤 Ник в Роблоксе",
+              value: isServer ? offer.contactInfo : `\`${offer.contactInfo}\``,
+              inline: false
+            }
           )
           .setColor(BRAINROT_COLOR)
-          .setFooter({ text: FOOTER_TEXT })
+          .setFooter({ text: `Нажмите «Я получил» только после получения брейнрота • ${FOOTER_TEXT}` })
           .setTimestamp();
 
-        return interaction.update({ embeds: [confirmEmbed], components: [keyRow] });
+        return interaction.update({ embeds: [tradeEmbed], components: [receivedRow] });
       }
 
       // ── DEFAULT: show modal asking the receiver how much time they offer ──
@@ -3079,6 +3104,143 @@ client.on("interactionCreate", async (interaction) => {
           new EmbedBuilder()
             .setTitle("❌  Offer Declined")
             .setDescription("You declined the time offer. Try again via `/buy`.")
+            .setColor(ERROR_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ],
+        components: []
+      });
+    }
+
+    // ── Brainrot (SECOND GUILD): Receiver confirms they got the brainrot → show key tiers ──
+    if (interaction.customId.startsWith("brainrot_gotit_")) {
+      const offerId = interaction.customId.slice("brainrot_gotit_".length);
+      const offer   = brainrotOffers.get(offerId);
+
+      if (!offer) {
+        return interaction.update({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  Предложение истекло")
+              .setDescription("Это предложение уже не существует.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          components: []
+        });
+      }
+
+      if (interaction.user.id !== offer.receiverId) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Нет доступа")
+              .setDescription("Только получатель, принявший этот оффер, может продолжить.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      // Show key tier selection
+      const ajProduct  = PRODUCTS["auto_joiner"];
+      const tierButtons = await Promise.all(
+        ajProduct.tiers.map(async t => {
+          const stock = await getAvailableKeyCount(resolveStorageId("auto_joiner", t.days));
+          return new ButtonBuilder()
+            .setCustomId(`brainrot_givekey_${offerId}_${t.days}`)
+            .setLabel(`${t.days} Day${t.days > 1 ? "s" : ""} — ${stock} in stock`)
+            .setStyle(stock > 0 ? ButtonStyle.Success : ButtonStyle.Secondary)
+            .setEmoji("🔑")
+            .setDisabled(stock === 0);
+        })
+      );
+
+      const keyRow = new ActionRowBuilder().addComponents(...tierButtons);
+
+      return interaction.update({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("🔑  Выберите тир ключа для выдачи")
+            .setDescription(
+              `Отлично! Брейнрот получен ✅\n\n` +
+              `Теперь выберите тир **Auto Joiner** ключа, который хотите выдать покупателю <@${offer.buyerId}>:`
+            )
+            .addFields(
+              { name: "🐸 Брейнрот", value: `\`${offer.brainrotInfo}\``, inline: true },
+              { name: "👤 Покупатель", value: `<@${offer.buyerId}>`,      inline: true }
+            )
+            .setColor(SUCCESS_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ],
+        components: [keyRow]
+      });
+    }
+
+    // ── Brainrot (SECOND GUILD): Receiver says they didn't get the brainrot ──
+    if (interaction.customId.startsWith("brainrot_notgot_")) {
+      const offerId = interaction.customId.slice("brainrot_notgot_".length);
+      const offer   = brainrotOffers.get(offerId);
+
+      if (!offer) {
+        return interaction.update({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  Предложение истекло")
+              .setDescription("Это предложение уже не существует.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          components: []
+        });
+      }
+
+      if (interaction.user.id !== offer.receiverId) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Нет доступа")
+              .setDescription("Только получатель, принявший этот оффер, может его отклонить.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      // Notify buyer
+      try {
+        const buyer = await client.users.fetch(offer.buyerId);
+        await buyer.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Trade Failed")
+              .setDescription(
+                "The receiver reported that they **did not receive** your brainrot.\n\n" +
+                "The deal has been cancelled. Please try again or use a different payment method via `/buy`."
+              )
+              .addFields(
+                { name: "🐸 Brainrot", value: `\`${offer.brainrotInfo}\``, inline: true },
+                { name: "🆔 Offer ID", value: `\`${offerId}\``,            inline: true }
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      } catch {
+        console.log(`⚠️ Could not DM buyer ${offer.buyerId} about not received`);
+      }
+
+      brainrotOffers.delete(offerId);
+
+      return interaction.update({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("❌  Сделка отменена")
+            .setDescription("Вы отметили, что не получили брейнрота. Покупатель уведомлён. Сделка отменена.")
             .setColor(ERROR_COLOR)
             .setFooter({ text: FOOTER_TEXT })
             .setTimestamp()
