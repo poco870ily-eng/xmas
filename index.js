@@ -1677,6 +1677,26 @@ function buildReceiverOfferEmbed(buyerUser, brainrotInfo, contactInfo, offerId) 
 }
 
 /**
+ * Modal shown to the receiver when they decline — they enter a comment for the buyer
+ */
+function buildBrainrotDeclineCommentModal(offerId) {
+  const modal = new ModalBuilder()
+    .setCustomId(`modal_brainrot_decline_comment_${offerId}`)
+    .setTitle("❌ Причина отказа");
+
+  const commentInput = new TextInputBuilder()
+    .setCustomId("decline_comment")
+    .setLabel("Комментарий покупателю (необязательно)")
+    .setStyle(TextInputStyle.Paragraph)
+    .setPlaceholder("Например: Брейнрот слишком слабый, предложи другой...")
+    .setRequired(false)
+    .setMaxLength(500);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(commentInput));
+  return modal;
+}
+
+/**
  * Embed sent to buyer showing the time offer from receiver, with Agree/Decline buttons
  */
 function buildBuyerTimeOfferEmbed(receiverUser, offeredLabel, offerId) {
@@ -2801,7 +2821,7 @@ client.on("interactionCreate", async (interaction) => {
       if (offer.guildId === SECOND_GUILD_ID) {
         const isServer = isPrivateServer(offer.contactInfo);
 
-        // 1. Notify buyer that receiver accepted
+        // 1. Notify buyer that receiver accepted - buyer must send brainrot FIRST
         try {
           const buyer = await client.users.fetch(offer.buyerId);
           await buyer.send({
@@ -2809,15 +2829,16 @@ client.on("interactionCreate", async (interaction) => {
               new EmbedBuilder()
                 .setTitle("🤝  Receiver Accepted Your Offer!")
                 .setDescription(
-                  `A receiver has accepted your brainrot offer.\n` +
-                  `**Wait while they verify the trade on their end.**`
+                  `A receiver has accepted your brainrot offer.\n\n` +
+                  `⚠️ **YOU must send the brainrot FIRST!**\n` +
+                  `Send the brainrot to the receiver, then wait for them to confirm receipt.`
                 )
                 .addFields(
                   { name: "🐸 Brainrot",  value: `\`${offer.brainrotInfo}\``, inline: true },
                   { name: "🆔 Offer ID",  value: `\`${offerId}\``,            inline: true }
                 )
                 .setColor(BRAINROT_COLOR)
-                .setFooter({ text: `Waiting for receiver confirmation • ${FOOTER_TEXT}` })
+                .setFooter({ text: `Send brainrot FIRST, then wait for confirmation • ${FOOTER_TEXT}` })
                 .setTimestamp()
             ]
           });
@@ -2899,43 +2920,8 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Notify buyer of decline (English)
-      try {
-        const buyer = await client.users.fetch(offer.buyerId);
-        await buyer.send({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  Offer Declined")
-              .setDescription(
-                "Unfortunately, the receiver **declined** your brainrot offer.\n\n" +
-                "Try again later or choose a different payment method via `/buy`."
-              )
-              .addFields(
-                { name: "🐸 Brainrot",  value: `\`${offer.brainrotInfo}\``, inline: true },
-                { name: "🆔 Offer ID",  value: `\`${offerId}\``,            inline: true }
-              )
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-              .setTimestamp()
-          ]
-        });
-      } catch {
-        console.log(`⚠️ Could not DM buyer ${offer.buyerId} about decline`);
-      }
-
-      brainrotOffers.delete(offerId);
-
-      return interaction.update({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle("❌  Предложение отклонено")
-            .setDescription(`Вы отклонили предложение брейнротов. Покупатель уведомлён.`)
-            .setColor(ERROR_COLOR)
-            .setFooter({ text: FOOTER_TEXT })
-            .setTimestamp()
-        ],
-        components: []
-      });
+      // Show modal to enter optional comment for the buyer
+      return interaction.showModal(buildBrainrotDeclineCommentModal(offerId));
     }
 
     // ── Brainrot: Buyer agrees to the offered time ──
@@ -2981,14 +2967,20 @@ client.on("interactionCreate", async (interaction) => {
 
       if (isServer) {
         buyerInstructionEmbed
-          .setDescription("Great! Wait for the receiver on the **private server**.")
+          .setDescription(
+            `Great! **YOU must send the brainrot FIRST!**\n` +
+            `Go to the private server, send the brainrot, then wait for the receiver to grant you access.`
+          )
           .addFields(
             { name: "🔗 Private Server Link", value: offer.contactInfo,                   inline: false },
             { name: "⏱️ Promised Time",       value: `\`${offer.offeredLabel}\``,         inline: true }
           );
       } else {
         buyerInstructionEmbed
-          .setDescription("Great! Send a **friend request** to the receiver on Roblox.")
+          .setDescription(
+            `Great! **YOU must send the brainrot FIRST!**\n` +
+            `Add the receiver on Roblox, send the brainrot, then wait for them to grant you access.`
+          )
           .addFields(
             { name: "👤 Receiver's Roblox username (add as friend)", value: `\`${offer.contactInfo}\``, inline: false },
             { name: "⏱️ Promised Time",                              value: `\`${offer.offeredLabel}\``, inline: true }
@@ -3386,43 +3378,8 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Notify buyer
-      try {
-        const buyer = await client.users.fetch(offer.buyerId);
-        await buyer.send({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  Offer Declined")
-              .setDescription(
-                "Unfortunately, the receiver **declined** your brainrot offer.\n\n" +
-                "Try again later or choose a different payment method via `/buy`."
-              )
-              .addFields(
-                { name: "🐸 Brainrot", value: `\`${offer.brainrotInfo}\``, inline: true },
-                { name: "🆔 Offer ID", value: `\`${offerId}\``,            inline: true }
-              )
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-              .setTimestamp()
-          ]
-        });
-      } catch {
-        console.log(`⚠️ Could not DM buyer ${offer.buyerId} about key decline`);
-      }
-
-      brainrotOffers.delete(offerId);
-
-      return interaction.update({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle("❌  Предложение отклонено")
-            .setDescription("Вы отклонили предложение. Покупатель уведомлён.")
-            .setColor(ERROR_COLOR)
-            .setFooter({ text: FOOTER_TEXT })
-            .setTimestamp()
-        ],
-        components: []
-      });
+      // Show modal to enter optional comment for the buyer
+      return interaction.showModal(buildBrainrotDeclineCommentModal(offerId));
     }
 
     // ── Brainrot: Receiver grants time to buyer ──
@@ -3897,6 +3854,9 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       if (method === "balance") {
+        // Defer update FIRST to avoid "Unknown interaction" (3-sec timeout)
+        await interaction.deferUpdate();
+
         if (interaction.guildId === RESTRICTED_GUILD_ID) {
           const product  = PRODUCTS["notifier"];
           const currentCount = await getNotifierCurrentCount();
@@ -3938,14 +3898,14 @@ client.on("interactionCreate", async (interaction) => {
                   .setDisabled(true)
               )
             );
-            return interaction.update({ embeds: [embed], components: [disabledRow] });
+            return interaction.editReply({ embeds: [embed], components: [disabledRow] });
           }
 
-          return interaction.update({ embeds: [embed], components: row ? [row] : [] });
+          return interaction.editReply({ embeds: [embed], components: row ? [row] : [] });
         }
 
         const embed = await buildShopEmbed(interaction.guildId);
-        return interaction.update({
+        return interaction.editReply({
           embeds: [embed],
           components: [buildProductMenu(interaction.guildId)]
         });
@@ -4093,6 +4053,74 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.deferReply({ flags: 64 });
       await processPayment(interaction, userId, amount, pending.currency);
       return;
+    }
+
+    // ===== MODAL: Receiver enters decline comment for buyer =====
+    if (interaction.customId.startsWith("modal_brainrot_decline_comment_")) {
+      await interaction.deferReply({ flags: 64 });
+
+      const offerId = interaction.customId.slice("modal_brainrot_decline_comment_".length);
+      const offer   = brainrotOffers.get(offerId);
+
+      if (!offer) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  Предложение истекло")
+              .setDescription("Это предложение больше не существует или уже было обработано.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const comment = interaction.fields.getTextInputValue("decline_comment").trim();
+
+      // Notify buyer of decline with optional comment
+      try {
+        const buyer = await client.users.fetch(offer.buyerId);
+        const declineEmbed = new EmbedBuilder()
+          .setTitle("❌  Offer Declined")
+          .setDescription(
+            "Unfortunately, the receiver **declined** your brainrot offer.\n\n" +
+            "Try again later or choose a different payment method via `/buy`."
+          )
+          .addFields(
+            { name: "🐸 Brainrot",  value: `\`${offer.brainrotInfo}\``, inline: true },
+            { name: "🆔 Offer ID",  value: `\`${offerId}\``,            inline: true }
+          )
+          .setColor(ERROR_COLOR)
+          .setFooter({ text: FOOTER_TEXT })
+          .setTimestamp();
+
+        if (comment) {
+          declineEmbed.addFields({
+            name: "💬 Comment from Receiver",
+            value: comment,
+            inline: false
+          });
+        }
+
+        await buyer.send({ embeds: [declineEmbed] });
+      } catch {
+        console.log(`⚠️ Could not DM buyer ${offer.buyerId} about decline`);
+      }
+
+      brainrotOffers.delete(offerId);
+
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("❌  Предложение отклонено")
+            .setDescription(
+              `Вы отклонили предложение брейнротов. Покупатель уведомлён.` +
+              (comment ? `\n\n💬 Ваш комментарий: **${comment}**` : "")
+            )
+            .setColor(ERROR_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
     }
 
     // ===== MODAL: Brainrot offer submission (from buyer) =====
