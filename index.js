@@ -183,9 +183,10 @@ const SLASH_COMMANDS = [
       }
     ]
   },
+  // ===== CHANGETIME — теперь как slash-опции, без модала =====
   {
     name: "changetime",
-    description: "🕐 [Pay Access] Set a custom expiry time for a Notifier subscriber",
+    description: "🕐 [Pay Access] Set a custom expiry time (from now) for a Notifier subscriber",
     dm_permission: false,
     options: [
       {
@@ -193,6 +194,30 @@ const SLASH_COMMANDS = [
         description: "The user to set time for",
         type: ApplicationCommandOptionType.User,
         required: true
+      },
+      {
+        name: "days",
+        description: "Days from now (0 or more)",
+        type: ApplicationCommandOptionType.Integer,
+        required: false,
+        min_value: 0,
+        max_value: 365
+      },
+      {
+        name: "hours",
+        description: "Hours to add on top of days (0-23)",
+        type: ApplicationCommandOptionType.Integer,
+        required: false,
+        min_value: 0,
+        max_value: 23
+      },
+      {
+        name: "minutes",
+        description: "Minutes to add on top (0-59)",
+        type: ApplicationCommandOptionType.Integer,
+        required: false,
+        min_value: 0,
+        max_value: 59
       }
     ]
   },
@@ -554,20 +579,22 @@ async function getAccessPlusUsers() {
 }
 
 // ===== BRAINROT ROLE HELPERS (FIXED) =====
+// Используем прямой перебор guild.members.cache вместо role.members,
+// чтобы гарантированно получить актуальные данные после fetch().
 async function getBrainrotUsers() {
   const seen  = new Set();
   const users = [];
 
   for (const [, guild] of client.guilds.cache) {
-    // Сначала загружаем ВСЕХ участников — это заполнит roles.cache у каждого
+    // Принудительно загружаем ВСЕХ участников
     try {
-      await guild.members.fetch();
+      await guild.members.fetch({ force: true });
     } catch (e) {
       console.error(`❌ Could not fetch members for guild "${guild.name}":`, e.message);
       continue;
     }
 
-    // Теперь роли участников в кеше актуальны — ищем роль
+    // Ищем роль Brainrot
     const role = guild.roles.cache.find(
       r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_BRAINROT)
     );
@@ -582,8 +609,10 @@ async function getBrainrotUsers() {
 
     console.log(`✅ Found Brainrot role "${role.name}" (${role.id}) in guild "${guild.name}"`);
 
-    // role.members актуален после guild.members.fetch()
-    for (const [, member] of role.members) {
+    // FIX: перебираем guild.members.cache напрямую и проверяем наличие роли
+    // (role.members может быть пустым, если кеш роли не синхронизирован)
+    for (const [, member] of guild.members.cache) {
+      if (!member.roles.cache.has(role.id)) continue;
       if (seen.has(member.id)) continue;
       seen.add(member.id);
       users.push(member.user);
@@ -2127,43 +2156,107 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // ===== /changetime — FIXED: лейбл укорочен до 43 символов (лимит Discord 45) =====
+    // ===== /changetime — теперь slash-опции как в /compensate, БЕЗ модала =====
     if (commandName === "changetime") {
-      try {
-        const targetUser = interaction.options.getUser("user");
+      await interaction.deferReply({ flags: 64 });
 
-        const modal = new ModalBuilder()
-          .setCustomId(`modal_changetime_${targetUser.id}`)
-          .setTitle(`Set Time — ${targetUser.username}`);
-
-        // FIX: лейбл был 47 символов → Discord выбрасывал исключение → showModal падал
-        const input = new TextInputBuilder()
-          .setCustomId("changetime_input")
-          .setLabel("From now (e.g. 7d / 3h / 1d 12h / 30m)")
-          .setStyle(TextInputStyle.Short)
-          .setPlaceholder("Examples: 7d  |  3h  |  1d 12h  |  30m  |  2d 6h 30m")
-          .setRequired(true);
-
-        modal.addComponents(new ActionRowBuilder().addComponents(input));
-        return await interaction.showModal(modal);
-      } catch (err) {
-        console.error("❌ /changetime showModal error:", err.message);
-        try {
-          if (!interaction.replied && !interaction.deferred) {
-            await interaction.reply({
-              embeds: [
-                new EmbedBuilder()
-                  .setTitle("❌  Error")
-                  .setDescription("Failed to open the dialog. Please try again.")
-                  .setColor(ERROR_COLOR)
-                  .setFooter({ text: FOOTER_TEXT })
-              ],
-              ephemeral: true
-            });
-          }
-        } catch { /* ignore */ }
+      const accessTier = await getAccessTier(interaction.user.id);
+      if (!accessTier) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
       }
-      return;
+
+      const targetUser = interaction.options.getUser("user");
+      const days       = interaction.options.getInteger("days")    || 0;
+      const hours      = interaction.options.getInteger("hours")   || 0;
+      const minutes    = interaction.options.getInteger("minutes") || 0;
+
+      if (days === 0 && hours === 0 && minutes === 0) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Invalid Input")
+              .setDescription("Please specify at least 1 day, 1 hour, or 1 minute.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const totalMs   = (days * 24 * 60 * 60 + hours * 60 * 60 + minutes * 60) * 1000;
+      const newExpiry = new Date(Date.now() + totalMs);
+      const unixExpiry = Math.floor(newExpiry.getTime() / 1000);
+
+      const parts = [];
+      if (days > 0)    parts.push(`${days}d`);
+      if (hours > 0)   parts.push(`${hours}h`);
+      if (minutes > 0) parts.push(`${minutes}м`);
+      const timeLabel = parts.join(" ");
+
+      const { error: upsertError } = await supabase
+        .from("subscriptions")
+        .upsert(
+          { user_id: targetUser.id.toString(), expires_at: newExpiry.toISOString() },
+          { onConflict: "user_id" }
+        );
+
+      if (upsertError) {
+        console.error("❌ changetime upsert error:", upsertError.message);
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Database Error")
+              .setDescription(`Failed to update subscription time.\n\`${upsertError.message}\``)
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      try {
+        await targetUser.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🕐  Subscription Time Updated")
+              .setDescription(
+                `An administrator has set your Notifier subscription to **${timeLabel}** from now.`
+              )
+              .addFields(
+                { name: "⏱️ New Duration", value: `\`${timeLabel}\``,    inline: true },
+                { name: "📅 Expires",      value: `<t:${unixExpiry}:F>`, inline: true }
+              )
+              .setColor(ACCESS_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      } catch {
+        console.log(`⚠️ Could not DM ${targetUser.tag} about changetime`);
+      }
+
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("🕐  Time Set Successfully")
+            .setDescription(`<@${targetUser.id}>'s subscription has been set to **${timeLabel}** from now.`)
+            .addFields(
+              { name: "👤 Target User", value: `<@${targetUser.id}> (\`${targetUser.tag}\`)`,    inline: true  },
+              { name: "⏱️ New Time",    value: `\`${timeLabel}\``,                               inline: true  },
+              { name: "📅 Expires",     value: `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)`,      inline: false },
+              { name: "🛠️ By",         value: `<@${interaction.user.id}>`,                       inline: true  }
+            )
+            .setColor(SUCCESS_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
     }
 
     // ===== /pause =====
@@ -3402,127 +3495,6 @@ client.on("interactionCreate", async (interaction) => {
       pendingPayments.set(userId, pending);
       await interaction.deferReply({ flags: 64 });
       await processPayment(interaction, userId, amount, pending.currency);
-      return;
-    }
-
-    // ===== MODAL: changetime =====
-    if (interaction.customId.startsWith("modal_changetime_")) {
-      try {
-        await interaction.deferReply({ flags: 64 });
-
-        const accessTier = await getAccessTier(interaction.user.id);
-        if (!accessTier) {
-          return interaction.editReply({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("⛔  Access Denied")
-                .setDescription(`This command requires the **${ROLE_ACCESS}** or **${ROLE_ACCESS_PLUS}** role.`)
-                .setColor(ERROR_COLOR)
-                .setFooter({ text: FOOTER_TEXT })
-            ]
-          });
-        }
-
-        const targetUserId = interaction.customId.slice("modal_changetime_".length);
-        const timeStr      = interaction.fields.getTextInputValue("changetime_input").trim();
-        const totalMs      = parseTimeString(timeStr);
-
-        if (!totalMs || totalMs <= 0) {
-          return interaction.editReply({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("❌  Invalid Format")
-                .setDescription(
-                  "Could not parse the time. Use formats like:\n" +
-                  "`7d` — 7 days\n`3h` — 3 hours\n`30m` — 30 minutes\n`1d 12h` — 1 day 12 hours\n`2d 6h 30m` — 2 days 6 hours 30 minutes"
-                )
-                .setColor(ERROR_COLOR)
-                .setFooter({ text: FOOTER_TEXT })
-            ]
-          });
-        }
-
-        const newExpiry  = new Date(Date.now() + totalMs);
-        const unixExpiry = Math.floor(newExpiry.getTime() / 1000);
-        const timeLabel  = formatDuration(totalMs);
-
-        const { error: upsertError } = await supabase
-          .from("subscriptions")
-          .upsert(
-            { user_id: targetUserId.toString(), expires_at: newExpiry.toISOString() },
-            { onConflict: "user_id" }
-          );
-
-        if (upsertError) {
-          console.error("❌ changetime upsert error:", upsertError.message);
-          return interaction.editReply({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("❌  Database Error")
-                .setDescription(`Failed to update subscription time.\n\`${upsertError.message}\``)
-                .setColor(ERROR_COLOR)
-                .setFooter({ text: FOOTER_TEXT })
-            ]
-          });
-        }
-
-        try {
-          const targetUser = await client.users.fetch(targetUserId);
-          await targetUser.send({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("🕐  Subscription Time Updated")
-                .setDescription(
-                  `An administrator has set your Notifier subscription to **${timeLabel}** from now.`
-                )
-                .addFields(
-                  { name: "⏱️ New Duration", value: `\`${timeLabel}\``,    inline: true },
-                  { name: "📅 Expires",      value: `<t:${unixExpiry}:F>`, inline: true }
-                )
-                .setColor(ACCESS_COLOR)
-                .setFooter({ text: FOOTER_TEXT })
-                .setTimestamp()
-            ]
-          });
-        } catch {
-          console.log(`⚠️ Could not DM ${targetUserId} about changetime`);
-        }
-
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("🕐  Time Set Successfully")
-              .setDescription(`<@${targetUserId}>'s subscription has been set to **${timeLabel}** from now.`)
-              .addFields(
-                { name: "👤 Target User", value: `<@${targetUserId}>`,                            inline: true  },
-                { name: "⏱️ New Time",    value: `\`${timeLabel}\``,                              inline: true  },
-                { name: "📅 Expires",     value: `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)`,    inline: false },
-                { name: "🛠️ By",         value: `<@${interaction.user.id}>`,                     inline: true  }
-              )
-              .setColor(SUCCESS_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-              .setTimestamp()
-          ]
-        });
-      } catch (err) {
-        console.error("❌ modal_changetime_ error:", err.message);
-        try {
-          const reply = {
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("❌  Unexpected Error")
-                .setDescription(`\`${err.message}\`\nPlease try again.`)
-                .setColor(ERROR_COLOR)
-                .setFooter({ text: FOOTER_TEXT })
-            ]
-          };
-          if (interaction.deferred) {
-            await interaction.editReply(reply);
-          } else {
-            await interaction.reply({ ...reply, ephemeral: true });
-          }
-        } catch { /* ignore */ }
-      }
       return;
     }
 
