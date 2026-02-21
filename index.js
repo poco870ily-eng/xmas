@@ -528,7 +528,7 @@ async function getAccessPlusUsers() {
   for (const [, guild] of client.guilds.cache) {
     try {
       await guild.roles.fetch();
-      await guild.members.fetch();
+      await guild.members.fetch({ force: true });
     } catch (e) {
       console.error(`❌ Could not fetch data for guild "${guild.name}":`, e.message);
       continue;
@@ -550,15 +550,17 @@ async function getAccessPlusUsers() {
 
     console.log(`✅ Found Pay Access+ role "${role.name}" (${role.id}) in "${guild.name}"`);
 
-    for (const [, member] of role.members) {
+    // Итерируем напрямую по members.cache — самый надёжный способ
+    for (const [, member] of guild.members.cache) {
+      if (!member.roles.cache.has(role.id)) continue;
       if (seen.has(member.id)) continue;
       seen.add(member.id);
       users.push(member.user);
-      console.log(`👤 Pay Access+ user: ${member.user.tag}`);
+      console.log(`👤 Pay Access+ user found: ${member.user.tag}`);
     }
   }
 
-  console.log(`📊 Total Pay Access+ users: ${users.length}`);
+  console.log(`📊 Total Pay Access+ users found: ${users.length}`);
   return users;
 }
 
