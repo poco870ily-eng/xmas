@@ -42,7 +42,6 @@ const STOCK_CHANNEL_ID   = "1474349576814334047";
 const ROLE_ACCESS           = "Pay Access";
 const ROLE_ACCESS_PLUS      = "Pay Access+";
 const ROLE_NOTIFIER_ACCESS  = "Access";
-const ROLE_BRAINROT         = "Brainrot";
 
 // ===== (ОПЦИОНАЛЬНО) ROLE IDs =====
 const USE_ROLE_IDS        = false;
@@ -550,7 +549,6 @@ async function getAccessPlusUsers() {
 
     console.log(`✅ Found Pay Access+ role "${role.name}" (${role.id}) in "${guild.name}"`);
 
-    // Итерируем напрямую по members.cache — самый надёжный способ
     for (const [, member] of guild.members.cache) {
       if (!member.roles.cache.has(role.id)) continue;
       if (seen.has(member.id)) continue;
@@ -561,48 +559,6 @@ async function getAccessPlusUsers() {
   }
 
   console.log(`📊 Total Pay Access+ users found: ${users.length}`);
-  return users;
-}
-
-// ===== BRAINROT ROLE HELPERS (FIXED) =====
-async function getBrainrotUsers() {
-  const seen  = new Set();
-  const users = [];
-
-  for (const [, guild] of client.guilds.cache) {
-    // Сначала загружаем ВСЕХ участников — это заполнит roles.cache у каждого
-    try {
-      await guild.members.fetch();
-    } catch (e) {
-      console.error(`❌ Could not fetch members for guild "${guild.name}":`, e.message);
-      continue;
-    }
-
-    // Теперь роли участников в кеше актуальны — ищем роль
-    const role = guild.roles.cache.find(
-      r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_BRAINROT)
-    );
-
-    if (!role) {
-      console.warn(
-        `⚠️ Role "${ROLE_BRAINROT}" not found in guild "${guild.name}". ` +
-        `Available roles: ${guild.roles.cache.map(r => r.name).join(", ")}`
-      );
-      continue;
-    }
-
-    console.log(`✅ Found Brainrot role "${role.name}" (${role.id}) in guild "${guild.name}"`);
-
-    // role.members актуален после guild.members.fetch()
-    for (const [, member] of role.members) {
-      if (seen.has(member.id)) continue;
-      seen.add(member.id);
-      users.push(member.user);
-      console.log(`👤 Brainrot staff found: ${member.user.tag}`);
-    }
-  }
-
-  console.log(`📊 Total Brainrot staff found: ${users.length}`);
   return users;
 }
 
@@ -1046,51 +1002,6 @@ async function redeemCoupon(code, userId) {
   return { success: true, amount: data.amount };
 }
 
-// ===== BRAINROT REQUEST HELPERS =====
-async function createBrainrotRequest(buyerId, brainrotName, robloxInfo) {
-  const { data, error } = await supabase
-    .from("brainrot_requests")
-    .insert({
-      buyer_id: buyerId.toString(),
-      brainrot_name: brainrotName,
-      roblox_info: robloxInfo,
-      status: "pending"
-    })
-    .select("id")
-    .single();
-
-  if (error) {
-    console.error("❌ Error creating brainrot request:", error.message);
-    return null;
-  }
-
-  return data.id;
-}
-
-async function updateBrainrotRequest(requestId, status, handledBy) {
-  const { error } = await supabase
-    .from("brainrot_requests")
-    .update({ status, handled_by: handledBy.toString() })
-    .eq("id", requestId);
-
-  if (error) {
-    console.error("❌ Error updating brainrot request:", error.message);
-    return false;
-  }
-  return true;
-}
-
-async function getBrainrotRequest(requestId) {
-  const { data, error } = await supabase
-    .from("brainrot_requests")
-    .select("*")
-    .eq("id", requestId)
-    .single();
-
-  if (error || !data) return null;
-  return data;
-}
-
 // ===== PAYMENT MESSAGE TRACKING =====
 const paymentMessages = new Map();
 
@@ -1251,7 +1162,6 @@ const PLUS_COLOR     = 0xA855F7;
 const FUNPAY_COLOR   = 0xFF6B35;
 const ACCESS_COLOR   = 0x00BCD4;
 const PAUSE_COLOR    = 0xFF8C00;
-const BRAINROT_COLOR = 0x9B59B6;
 const COUPON_COLOR   = 0x1ABC9C;
 
 const FOOTER_TEXT = "⚡ Nameless Paysystem";
@@ -1311,8 +1221,7 @@ function buildMainMenuEmbed() {
         value:
           `**${ROLE_ACCESS}** — Can use staff commands\n` +
           `**${ROLE_ACCESS_PLUS}** — All above + receives payment notifications\n` +
-          `**${ROLE_NOTIFIER_ACCESS}** — Given to Notifier subscribers\n` +
-          `**${ROLE_BRAINROT}** — Can handle Brainrot payments`,
+          `**${ROLE_NOTIFIER_ACCESS}** — Given to Notifier subscribers`,
         inline: false
       }
     )
@@ -1402,22 +1311,6 @@ function buildFunPayEmbed() {
       "Contact them directly for support."
     )
     .setColor(FUNPAY_COLOR)
-    .setFooter({ text: FOOTER_TEXT })
-    .setTimestamp();
-}
-
-function buildBrainrotsInfoEmbed() {
-  return new EmbedBuilder()
-    .setTitle("🧠  Pay with Brainrots")
-    .setDescription(
-      "**Pay using your Roblox Brainrot farming!**\n\n" +
-      "To submit a Brainrot payment request, click the button below.\n\n" +
-      "**You will need to provide:**\n" +
-      "> 🎮 Brainrot name + generation rate (e.g. `Tralalero 1000/s`)\n" +
-      "> 🔗 Private server link **OR** your Roblox username\n\n" +
-      "Our **Brainrot** staff will review your request and assign you Notifier access accordingly."
-    )
-    .setColor(BRAINROT_COLOR)
     .setFooter({ text: FOOTER_TEXT })
     .setTimestamp();
 }
@@ -1531,12 +1424,7 @@ function buildPaymentMethodMenu() {
       .setLabel("🎮 Pay via FunPay")
       .setDescription("Purchase from our resellers")
       .setValue("funpay")
-      .setEmoji("🛒"),
-    new StringSelectMenuOptionBuilder()
-      .setLabel("🧠 Pay with Brainrots")
-      .setDescription("Pay using Roblox brainrot farming")
-      .setValue("brainrots")
-      .setEmoji("🎮")
+      .setEmoji("🛒")
   ];
 
   return new ActionRowBuilder().addComponents(
@@ -1882,8 +1770,7 @@ client.on("interactionCreate", async (interaction) => {
         .setDescription(
           "**Step 1 / 2** — Choose your payment method.\n\n" +
           "💰 **Balance** — Use your account balance (instant delivery)\n" +
-          "🎮 **FunPay** — Purchase from our trusted resellers\n" +
-          "🧠 **Brainrots** — Pay with Roblox brainrot farming"
+          "🎮 **FunPay** — Purchase from our trusted resellers"
         )
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT })
@@ -2138,7 +2025,7 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // ===== /changetime — FIXED: лейбл укорочен до 43 символов (лимит Discord 45) =====
+    // /changetime
     if (commandName === "changetime") {
       try {
         const targetUser = interaction.options.getUser("user");
@@ -2147,7 +2034,6 @@ client.on("interactionCreate", async (interaction) => {
           .setCustomId(`modal_changetime_${targetUser.id}`)
           .setTitle(`Set Time — ${targetUser.username}`);
 
-        // FIX: лейбл был 47 символов → Discord выбрасывал исключение → showModal падал
         const input = new TextInputBuilder()
           .setCustomId("changetime_input")
           .setLabel("From now (e.g. 7d / 3h / 1d 12h / 30m)")
@@ -2177,7 +2063,7 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // ===== /pause =====
+    // /pause
     if (commandName === "pause") {
       await interaction.deferReply({ flags: 64 });
 
@@ -2698,8 +2584,7 @@ client.on("interactionCreate", async (interaction) => {
         .setDescription(
           "**Step 1 / 2** — Choose your payment method.\n\n" +
           "💰 **Balance** — Use your account balance (instant delivery)\n" +
-          "🎮 **FunPay** — Purchase from our trusted resellers\n" +
-          "🧠 **Brainrots** — Pay with Roblox brainrot farming"
+          "🎮 **FunPay** — Purchase from our trusted resellers"
         )
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT })
@@ -2710,128 +2595,6 @@ client.on("interactionCreate", async (interaction) => {
         components: [buildPaymentMethodMenu()],
         ephemeral: true
       });
-    }
-
-    // ── Brainrot: open submission modal ──
-    if (interaction.customId === "btn_brainrot_submit") {
-      const modal = new ModalBuilder()
-        .setCustomId("modal_brainrot_request")
-        .setTitle("🧠 Brainrot Payment Request");
-
-      const brainrotInput = new TextInputBuilder()
-        .setCustomId("brainrot_name_gen")
-        .setLabel("Brainrot name + generation/sec")
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder("e.g. Tralalero Tralala 1000/s")
-        .setRequired(true);
-
-      const robloxInput = new TextInputBuilder()
-        .setCustomId("roblox_info")
-        .setLabel("Roblox private server link OR username")
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder("e.g. https://www.roblox.com/... OR YourRobloxUsername")
-        .setRequired(true);
-
-      modal.addComponents(
-        new ActionRowBuilder().addComponents(brainrotInput),
-        new ActionRowBuilder().addComponents(robloxInput)
-      );
-
-      return interaction.showModal(modal);
-    }
-
-    // ── Brainrot staff: Accept ──
-    if (interaction.customId.startsWith("brainrot_accept_")) {
-      const withoutPrefix  = interaction.customId.slice("brainrot_accept_".length);
-      const separatorIndex = withoutPrefix.lastIndexOf("_");
-      const requestId      = withoutPrefix.substring(0, separatorIndex);
-      const buyerId        = withoutPrefix.substring(separatorIndex + 1);
-
-      const request = await getBrainrotRequest(requestId);
-      if (!request) {
-        return interaction.reply({
-          content: "❌ Запрос не найден в базе данных.",
-          ephemeral: true
-        });
-      }
-
-      if (request.status !== "pending") {
-        return interaction.reply({
-          content: `⚠️ Этот запрос уже обработан (статус: **${request.status}**).`,
-          ephemeral: true
-        });
-      }
-
-      const modal = new ModalBuilder()
-        .setCustomId(`modal_brainrot_time_${requestId}_${buyerId}`)
-        .setTitle("⏰ Сколько времени выдать?");
-
-      const timeInput = new TextInputBuilder()
-        .setCustomId("brainrot_time_input")
-        .setLabel("Время нотифаера (7d / 3h / 1d 12h)")
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder("Примеры: 3d  |  7d  |  14d  |  1d 12h  |  6h")
-        .setRequired(true);
-
-      modal.addComponents(new ActionRowBuilder().addComponents(timeInput));
-      return interaction.showModal(modal);
-    }
-
-    // ── Brainrot staff: Decline ──
-    if (interaction.customId.startsWith("brainrot_decline_")) {
-      const withoutPrefix  = interaction.customId.slice("brainrot_decline_".length);
-      const separatorIndex = withoutPrefix.lastIndexOf("_");
-      const requestId      = withoutPrefix.substring(0, separatorIndex);
-      const buyerId        = withoutPrefix.substring(separatorIndex + 1);
-
-      const request = await getBrainrotRequest(requestId);
-      if (!request) {
-        return interaction.reply({ content: "❌ Запрос не найден.", ephemeral: true });
-      }
-
-      if (request.status !== "pending") {
-        return interaction.reply({
-          content: `⚠️ Этот запрос уже обработан (статус: **${request.status}**).`,
-          ephemeral: true
-        });
-      }
-
-      await updateBrainrotRequest(requestId, "declined", interaction.user.id);
-
-      try {
-        const buyer = await client.users.fetch(buyerId);
-        await buyer.send({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  Brainrot Request Declined")
-              .setDescription(
-                "Your **Brainrot** payment request has been declined by our staff.\n\n" +
-                "You can try again with `/buy` or use another payment method."
-              )
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-              .setTimestamp()
-          ]
-        });
-      } catch {
-        console.log(`⚠️ Could not DM buyer ${buyerId} about brainrot decline`);
-      }
-
-      try {
-        await interaction.update({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  Запрос отклонён")
-              .setDescription(`Вы отклонили запрос от <@${buyerId}>.`)
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-              .setTimestamp()
-          ],
-          components: []
-        });
-      } catch {
-        await interaction.reply({ content: "✅ Запрос отклонён. Покупатель уведомлён.", ephemeral: true });
-      }
     }
 
     // ── Buy product buttons ──
@@ -3212,20 +2975,6 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      if (method === "brainrots") {
-        const brainrotRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId("btn_brainrot_submit")
-            .setLabel("🧠 Submit Brainrot Request")
-            .setStyle(ButtonStyle.Primary)
-        );
-
-        return interaction.update({
-          embeds: [buildBrainrotsInfoEmbed()],
-          components: [brainrotRow]
-        });
-      }
-
       if (method === "balance") {
         if (interaction.guildId === RESTRICTED_GUILD_ID) {
           const product  = PRODUCTS["notifier"];
@@ -3544,237 +3293,6 @@ client.on("interactionCreate", async (interaction) => {
         } catch { /* ignore */ }
       }
       return;
-    }
-
-    // ===== MODAL: brainrot request submission =====
-    if (interaction.customId === "modal_brainrot_request") {
-      await interaction.deferReply({ flags: 64 });
-
-      const brainrotNameGen = interaction.fields.getTextInputValue("brainrot_name_gen").trim();
-      const robloxInfo      = interaction.fields.getTextInputValue("roblox_info").trim();
-      const buyerId         = interaction.user.id;
-
-      const currentCount = await getNotifierCurrentCount();
-      const available    = MAX_NOTIFIER_STOCK - currentCount;
-
-      if (available <= 0) {
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("🛑  No Slots Available")
-              .setDescription(
-                `**Notifier** is currently full! (**${currentCount}/${MAX_NOTIFIER_STOCK}** slots occupied)\n\n` +
-                `Please check back later when a slot opens up.`
-              )
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-              .setTimestamp()
-          ]
-        });
-      }
-
-      const requestId = await createBrainrotRequest(buyerId, brainrotNameGen, robloxInfo);
-
-      if (!requestId) {
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  Request Failed")
-              .setDescription("Could not save your request. Please try again later.")
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        });
-      }
-
-      // Отправляем заявку Pay Access+ пользователям
-      const brainrotUsers = await getAccessPlusUsers();
-
-      if (brainrotUsers.length === 0) {
-        await updateBrainrotRequest(requestId, "no_staff", "system");
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️  No Staff Available")
-              .setDescription(
-                "There are currently no **Pay Access+** staff available to handle your request.\n\n" +
-                "Please try another payment method or contact support."
-              )
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        });
-      }
-
-      const acceptButton = new ButtonBuilder()
-        .setCustomId(`brainrot_accept_${requestId}_${buyerId}`)
-        .setLabel("✅ Принять")
-        .setStyle(ButtonStyle.Success);
-
-      const declineButton = new ButtonBuilder()
-        .setCustomId(`brainrot_decline_${requestId}_${buyerId}`)
-        .setLabel("❌ Отказать")
-        .setStyle(ButtonStyle.Danger);
-
-      const staffRow = new ActionRowBuilder().addComponents(acceptButton, declineButton);
-
-      let notifiedCount = 0;
-      for (const staffUser of brainrotUsers) {
-        try {
-          await staffUser.send({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("🧠  Новая заявка на оплату Brainrot!")
-                .setDescription(
-                  `Пользователь хочет купить **Notifier** через Brainrot фарм.\n\n` +
-                  `**Информация о заявке:**`
-                )
-                .addFields(
-                  { name: "👤 Покупатель", value: `<@${buyerId}> (\`${interaction.user.tag}\`)`, inline: false },
-                  { name: "🧠 Бреинрот + генерация", value: `\`${brainrotNameGen}\``, inline: false },
-                  { name: "🎮 Roblox информация", value: `\`${robloxInfo}\``, inline: false },
-                  { name: "📦 Свободных слотов", value: `\`${available}/${MAX_NOTIFIER_STOCK}\``, inline: true },
-                  { name: "🆔 ID заявки", value: `\`${requestId}\``, inline: true }
-                )
-                .setColor(BRAINROT_COLOR)
-                .setFooter({ text: "Нажмите ✅ Принять или ❌ Отказать • " + FOOTER_TEXT })
-                .setTimestamp()
-            ],
-            components: [staffRow]
-          });
-          notifiedCount++;
-          console.log(`✅ Notified Brainrot staff: ${staffUser.tag}`);
-        } catch (dmErr) {
-          console.log(`⚠️ Could not DM Brainrot staff ${staffUser.tag}:`, dmErr.message);
-        }
-      }
-
-      return interaction.editReply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle("✅  Brainrot Request Submitted!")
-            .setDescription(
-              "Your request has been sent to our **Brainrot** staff for review.\n\n" +
-              "You will receive a DM once your request is accepted or declined."
-            )
-            .addFields(
-              { name: "🧠 Brainrot Info", value: `\`${brainrotNameGen}\``, inline: false },
-              { name: "🎮 Roblox Info",   value: `\`${robloxInfo}\``,       inline: false },
-              { name: "📬 Staff Notified", value: `\`${notifiedCount}\` staff member(s)`, inline: true }
-            )
-            .setColor(BRAINROT_COLOR)
-            .setFooter({ text: FOOTER_TEXT })
-            .setTimestamp()
-        ]
-      });
-    }
-
-    // ===== MODAL: brainrot time selection (staff accepts) =====
-    if (interaction.customId.startsWith("modal_brainrot_time_")) {
-      await interaction.deferReply({ flags: 64 });
-
-      const withoutPrefix  = interaction.customId.slice("modal_brainrot_time_".length);
-      const separatorIndex = withoutPrefix.lastIndexOf("_");
-      const requestId      = withoutPrefix.substring(0, separatorIndex);
-      const buyerId        = withoutPrefix.substring(separatorIndex + 1);
-
-      const timeStr = interaction.fields.getTextInputValue("brainrot_time_input").trim();
-      const totalMs = parseTimeString(timeStr);
-
-      if (!totalMs || totalMs <= 0) {
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  Неверный формат")
-              .setDescription(
-                "Не удалось распознать время. Используй форматы:\n" +
-                "`3d` — 3 дня\n`7d` — 7 дней\n`14d` — 14 дней\n`1d 12h` — 1 день 12 часов\n`6h` — 6 часов"
-              )
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        });
-      }
-
-      const request = await getBrainrotRequest(requestId);
-      if (!request || request.status !== "pending") {
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  Заявка не найдена")
-              .setDescription("Эта заявка уже была обработана или не существует.")
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        });
-      }
-
-      await updateBrainrotRequest(requestId, "accepted", interaction.user.id);
-
-      let targetGuild = null;
-      for (const [, g] of client.guilds.cache) {
-        try {
-          await g.members.fetch({ user: buyerId, force: true });
-          targetGuild = g;
-          break;
-        } catch { /* continue */ }
-      }
-
-      await addSubscriptionMs(buyerId, totalMs);
-      await giveNotifierRole(buyerId, targetGuild);
-
-      const newExpiry  = new Date(Date.now() + totalMs);
-      const unixExpiry = Math.floor(newExpiry.getTime() / 1000);
-      const timeLabel  = formatDuration(totalMs);
-
-      try {
-        const buyer = await client.users.fetch(buyerId);
-        await buyer.send({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("🎉  Brainrot Payment Accepted!")
-              .setDescription(
-                "Your **Brainrot** payment request has been **accepted** by our staff!\n\n" +
-                `Your **${ROLE_NOTIFIER_ACCESS}** role is now active.`
-              )
-              .addFields(
-                { name: "⏱️ Access Duration", value: `\`${timeLabel}\``,                            inline: true },
-                { name: "📅 Expires",          value: `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)`, inline: false },
-                {
-                  name:  "📝 Next Step",
-                  value: interaction.user
-                    ? `Add **@${interaction.user.username}** in Roblox or join their server!`
-                    : "Contact the staff member for further instructions.",
-                  inline: false
-                }
-              )
-              .setColor(SUCCESS_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-              .setTimestamp()
-          ]
-        });
-      } catch {
-        console.log(`⚠️ Could not DM buyer ${buyerId} about brainrot acceptance`);
-      }
-
-      return interaction.editReply({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle("✅  Заявка принята!")
-            .setDescription(
-              `Вы выдали **${timeLabel}** нотифаера покупателю <@${buyerId}>.\n\n` +
-              `Роль **${ROLE_NOTIFIER_ACCESS}** и подписка успешно назначены.`
-            )
-            .addFields(
-              { name: "👤 Покупатель", value: `<@${buyerId}>`,      inline: true },
-              { name: "⏱️ Время",      value: `\`${timeLabel}\``,   inline: true },
-              { name: "📅 Истекает",   value: `<t:${unixExpiry}:F>`, inline: false }
-            )
-            .setColor(SUCCESS_COLOR)
-            .setFooter({ text: FOOTER_TEXT })
-            .setTimestamp()
-        ]
-      });
     }
 
     // ===== MODAL: delete key =====
