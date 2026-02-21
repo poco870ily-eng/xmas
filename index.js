@@ -32,7 +32,9 @@ const SUPABASE_KEY        = process.env.SUPABASE_KEY;
 const OWNER_ID            = process.env.OWNER_ID;
 
 // ===== RESTRICTED GUILD SETTINGS =====
-const RESTRICTED_GUILD_ID = "1418749872848375962";
+const RESTRICTED_GUILD_ID  = "1418749872848375962";  // notifier-only guild
+const SECOND_GUILD_ID      = "1175305747282792458";  // auto-joiner guild
+const RESTRICTED_GUILD_IDS = new Set([RESTRICTED_GUILD_ID, SECOND_GUILD_ID]);
 
 // ===== STOCK SETTINGS =====
 const MAX_NOTIFIER_STOCK = 15;
@@ -465,14 +467,22 @@ client.on("channelCreate", async (channel) => {
 });
 
 // ===== CHANNEL RESTRICTION HELPERS =====
-function isAllowedChannel(interaction) {
+async function isAllowedChannel(interaction) {
   if (!interaction.guildId) return true;
-  if (interaction.guildId !== RESTRICTED_GUILD_ID) return true;
+  if (!RESTRICTED_GUILD_IDS.has(interaction.guildId)) return true;
   const channelName = interaction.channel?.name?.toLowerCase() ?? "";
-  return channelName.includes("ticket");
+  if (channelName.includes("ticket")) return true;
+  // Staff can use commands anywhere
+  const tier = await getAccessTier(interaction.user.id);
+  return tier !== null;
 }
 
 function getAvailableProducts(guildId) {
+  if (guildId === SECOND_GUILD_ID) {
+    return Object.fromEntries(
+      Object.entries(PRODUCTS).filter(([id]) => id === "auto_joiner")
+    );
+  }
   if (guildId === RESTRICTED_GUILD_ID) {
     return Object.fromEntries(
       Object.entries(PRODUCTS).filter(([id]) => id === "notifier")
@@ -1692,7 +1702,7 @@ const pendingPayments = new Map();
 client.on("interactionCreate", async (interaction) => {
 
   // ──────────── CHANNEL RESTRICTION CHECK ────────────
-  if (!isAllowedChannel(interaction)) {
+  if (!(await isAllowedChannel(interaction))) {
     try {
       if (interaction.isRepliable()) {
         await interaction.reply({
@@ -2787,7 +2797,48 @@ client.on("interactionCreate", async (interaction) => {
       offer.receiverId = interaction.user.id;
       brainrotOffers.set(offerId, offer);
 
-      // Show modal asking the receiver how much time they offer
+      // ── SECOND GUILD: receiver chooses a key tier (or declines) ──
+      if (offer.guildId === SECOND_GUILD_ID) {
+        const ajProduct = PRODUCTS["auto_joiner"];
+        const tierButtons = await Promise.all(
+          ajProduct.tiers.map(async t => {
+            const stock = await getAvailableKeyCount(resolveStorageId("auto_joiner", t.days));
+            return new ButtonBuilder()
+              .setCustomId(`brainrot_givekey_${offerId}_${t.days}`)
+              .setLabel(`${t.days} Day${t.days > 1 ? "s" : ""} Key (${stock} in stock)`)
+              .setStyle(stock > 0 ? ButtonStyle.Success : ButtonStyle.Secondary)
+              .setEmoji("🔑")
+              .setDisabled(stock === 0);
+          })
+        );
+
+        const declineBtn = new ButtonBuilder()
+          .setCustomId(`brainrot_keydecline_${offerId}`)
+          .setLabel("❌ Отклонить")
+          .setStyle(ButtonStyle.Danger)
+          .setEmoji("🚫");
+
+        const keyRow = new ActionRowBuilder().addComponents(...tierButtons, declineBtn);
+
+        const isServer = isPrivateServer(offer.contactInfo);
+        const confirmEmbed = new EmbedBuilder()
+          .setTitle("🔑  Выберите ключ для выдачи")
+          .setDescription(
+            `Покупатель: <@${offer.buyerId}>\n` +
+            `Брейнрот: \`${offer.brainrotInfo}\`\n` +
+            (isServer
+              ? `🔗 [Приватный сервер](${offer.contactInfo})`
+              : `👤 Ник: \`${offer.contactInfo}\``) +
+            `\n\nВыберите тир ключа Auto Joiner для выдачи или отклоните:`
+          )
+          .setColor(BRAINROT_COLOR)
+          .setFooter({ text: FOOTER_TEXT })
+          .setTimestamp();
+
+        return interaction.update({ embeds: [confirmEmbed], components: [keyRow] });
+      }
+
+      // ── DEFAULT: show modal asking the receiver how much time they offer ──
       return interaction.showModal(buildBrainrotTimeOfferModal(offerId));
     }
 
@@ -3028,6 +3079,182 @@ client.on("interactionCreate", async (interaction) => {
           new EmbedBuilder()
             .setTitle("❌  Offer Declined")
             .setDescription("You declined the time offer. Try again via `/buy`.")
+            .setColor(ERROR_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ],
+        components: []
+      });
+    }
+
+    // ── Brainrot (SECOND GUILD): Receiver gives a key to buyer ──
+    if (interaction.customId.startsWith("brainrot_givekey_")) {
+      await interaction.deferUpdate();
+
+      const withoutPrefix  = interaction.customId.slice("brainrot_givekey_".length);
+      const lastUnderscore = withoutPrefix.lastIndexOf("_");
+      const offerId        = withoutPrefix.substring(0, lastUnderscore);
+      const days           = parseInt(withoutPrefix.substring(lastUnderscore + 1));
+      const offer          = brainrotOffers.get(offerId);
+
+      if (!offer) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  Предложение завершено")
+              .setDescription("Это предложение уже выполнено или больше не существует.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          components: []
+        });
+      }
+
+      if (interaction.user.id !== offer.receiverId) {
+        return interaction.followUp({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Нет доступа")
+              .setDescription("Только получатель, принявший это предложение, может выдать ключ.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      const storageId = resolveStorageId("auto_joiner", days);
+      const key       = await getRandomAvailableKey(storageId);
+
+      if (!key) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("📦  Нет ключей")
+              .setDescription(`Для **Auto Joiner (${days} Day${days > 1 ? "s" : ""})** нет ключей в наличии. Выберите другой тир или пополните сток.`)
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          components: []
+        });
+      }
+
+      await markKeyAsUsed(key.id, offer.buyerId);
+      brainrotOffers.delete(offerId);
+
+      // Notify buyer (English)
+      try {
+        const buyer = await client.users.fetch(offer.buyerId);
+
+        const keyFileContent =
+          `Auto Joiner License Key (Brainrot Trade)\n` +
+          `==========================================\n\n` +
+          `Product: Auto Joiner\n` +
+          `Duration: ${days} day${days > 1 ? "s" : ""}\n` +
+          `Date: ${new Date().toISOString()}\n\n` +
+          `License Key:\n${key.key_value}\n\n` +
+          `==========================================\n` +
+          `Keep this key safe and secure.\n`;
+
+        const keyAttachment = new AttachmentBuilder(
+          Buffer.from(keyFileContent, "utf-8"),
+          { name: `AutoJoiner_Key_${Date.now()}.txt` }
+        );
+
+        await buyer.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🎉  Auto Joiner Key Received!")
+              .setDescription(
+                `The receiver has accepted your brainrot offer and sent you an **Auto Joiner** key!`
+              )
+              .addFields(
+                { name: "🔑 License Key",   value: `\`${key.key_value}\``,                                inline: false },
+                { name: "⏱️ Duration",      value: `\`${days} day${days > 1 ? "s" : ""}\``,              inline: true  },
+                { name: "🐸 Brainrot",      value: `\`${offer.brainrotInfo}\``,                           inline: true  }
+              )
+              .setColor(SUCCESS_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ],
+          files: [keyAttachment]
+        });
+        console.log(`📬 Auto Joiner key sent to buyer ${offer.buyerId}`);
+      } catch {
+        console.log(`⚠️ Could not DM buyer ${offer.buyerId} with Auto Joiner key`);
+      }
+
+      const newStock = await getAvailableKeyCount(storageId);
+
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("✅  Ключ выдан!")
+            .setDescription(
+              `Вы успешно выдали ключ **Auto Joiner (${days} Day${days > 1 ? "s" : ""})** покупателю <@${offer.buyerId}>.\nСделка завершена!`
+            )
+            .addFields(
+              { name: "👤 Покупатель",    value: `<@${offer.buyerId}>`,                         inline: true },
+              { name: "🔑 Тир",           value: `\`${days} day${days > 1 ? "s" : ""}\``,      inline: true },
+              { name: "📦 Остаток в стоке", value: `\`${newStock}\` ключей`,                   inline: true }
+            )
+            .setColor(SUCCESS_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ],
+        components: []
+      });
+    }
+
+    // ── Brainrot (SECOND GUILD): Receiver declines from key selection screen ──
+    if (interaction.customId.startsWith("brainrot_keydecline_")) {
+      const offerId = interaction.customId.slice("brainrot_keydecline_".length);
+      const offer   = brainrotOffers.get(offerId);
+
+      if (!offer) {
+        return interaction.update({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  Предложение истекло")
+              .setDescription("Предложение уже не существует.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          components: []
+        });
+      }
+
+      // Notify buyer
+      try {
+        const buyer = await client.users.fetch(offer.buyerId);
+        await buyer.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Offer Declined")
+              .setDescription(
+                "Unfortunately, the receiver **declined** your brainrot offer.\n\n" +
+                "Try again later or choose a different payment method via `/buy`."
+              )
+              .addFields(
+                { name: "🐸 Brainrot", value: `\`${offer.brainrotInfo}\``, inline: true },
+                { name: "🆔 Offer ID", value: `\`${offerId}\``,            inline: true }
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      } catch {
+        console.log(`⚠️ Could not DM buyer ${offer.buyerId} about key decline`);
+      }
+
+      brainrotOffers.delete(offerId);
+
+      return interaction.update({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("❌  Предложение отклонено")
+            .setDescription("Вы отклонили предложение. Покупатель уведомлён.")
             .setColor(ERROR_COLOR)
             .setFooter({ text: FOOTER_TEXT })
             .setTimestamp()
@@ -3730,6 +3957,7 @@ client.on("interactionCreate", async (interaction) => {
         buyerId:      interaction.user.id,
         brainrotInfo,
         contactInfo,
+        guildId:      interaction.guildId,
         receiverId:   null,
         offeredMs:    null,
         offeredLabel: null
