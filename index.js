@@ -3567,8 +3567,8 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // FIX: используем исправленную функцию getBrainrotUsers
-      const brainrotUsers = await getBrainrotUsers();
+      // Отправляем заявку Pay Access+ пользователям
+      const brainrotUsers = await getAccessPlusUsers();
 
       if (brainrotUsers.length === 0) {
         await updateBrainrotRequest(requestId, "no_staff", "system");
@@ -3577,7 +3577,7 @@ client.on("interactionCreate", async (interaction) => {
             new EmbedBuilder()
               .setTitle("⚠️  No Staff Available")
               .setDescription(
-                "There are currently no **Brainrot** staff available to handle your request.\n\n" +
+                "There are currently no **Pay Access+** staff available to handle your request.\n\n" +
                 "Please try another payment method or contact support."
               )
               .setColor(WARNING_COLOR)
