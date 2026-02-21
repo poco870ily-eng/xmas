@@ -1597,21 +1597,21 @@ function buildKeyListButtons(page, totalPages, storageId) {
 function buildBrainrotOfferModal() {
   const modal = new ModalBuilder()
     .setCustomId("modal_brainrot_offer")
-    .setTitle("🐸 Предложить брейнротов");
+    .setTitle("🐸 Offer Brainrots");
 
   const brainrotInput = new TextInputBuilder()
     .setCustomId("brainrot_info")
-    .setLabel("Имя брейнрота и его генерация")
+    .setLabel("Brainrot name and generation")
     .setStyle(TextInputStyle.Short)
-    .setPlaceholder("Например: Skibidi Toilet $1B/s")
+    .setPlaceholder("Example: Skibidi Toilet $1B/s")
     .setRequired(true)
     .setMaxLength(100);
 
   const contactInput = new TextInputBuilder()
     .setCustomId("brainrot_contact")
-    .setLabel("Приватный сервер или ник в Роблоксе")
+    .setLabel("Private server link or Roblox username")
     .setStyle(TextInputStyle.Short)
-    .setPlaceholder("https://ro.blox.com/... или ваш ник в Роблоксе")
+    .setPlaceholder("https://www.roblox.com/share?code=... or your Roblox username")
     .setRequired(true)
     .setMaxLength(200);
 
@@ -1671,17 +1671,17 @@ function buildReceiverOfferEmbed(buyerUser, brainrotInfo, contactInfo, offerId) 
  */
 function buildBuyerTimeOfferEmbed(receiverUser, offeredLabel, offerId) {
   return new EmbedBuilder()
-    .setTitle("⏱️  Получатель предложил время!")
+    .setTitle("⏱️  The Receiver Made a Time Offer!")
     .setDescription(
-      `Получатель рассмотрел ваше предложение брейнротов и готов дать вам доступ.`
+      `The receiver has reviewed your brainrot offer and is ready to give you access time.`
     )
     .addFields(
-      { name: "🕐 Предложенное время", value: `\`${offeredLabel}\``,          inline: true },
-      { name: "👤 Получатель",         value: `<@${receiverUser.id}>`,        inline: true },
-      { name: "🆔 Offer ID",           value: `\`${offerId}\``,               inline: false }
+      { name: "🕐 Offered Time", value: `\`${offeredLabel}\``,          inline: true },
+      { name: "👤 Receiver",     value: `<@${receiverUser.id}>`,        inline: true },
+      { name: "🆔 Offer ID",     value: `\`${offerId}\``,               inline: false }
     )
     .setColor(BRAINROT_COLOR)
-    .setFooter({ text: `Примите или отклоните предложение • ${FOOTER_TEXT}` })
+    .setFooter({ text: `Accept or decline the offer • ${FOOTER_TEXT}` })
     .setTimestamp();
 }
 
@@ -2761,8 +2761,8 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.reply({
           embeds: [
             new EmbedBuilder()
-              .setTitle("⚠️  Offer Expired")
-              .setDescription("This offer no longer exists or has already been handled.")
+              .setTitle("⚠️  Предложение истекло")
+              .setDescription("Это предложение больше не существует или уже было обработано.")
               .setColor(WARNING_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ],
@@ -2774,8 +2774,8 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.reply({
           embeds: [
             new EmbedBuilder()
-              .setTitle("⚠️  Already Accepted")
-              .setDescription("Another receiver has already accepted this offer.")
+              .setTitle("⚠️  Уже принято")
+              .setDescription("Другой получатель уже принял это предложение.")
               .setColor(WARNING_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ],
@@ -2800,8 +2800,8 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.reply({
           embeds: [
             new EmbedBuilder()
-              .setTitle("⚠️  Offer Expired")
-              .setDescription("This offer no longer exists.")
+              .setTitle("⚠️  Предложение истекло")
+              .setDescription("Это предложение больше не существует.")
               .setColor(WARNING_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ],
@@ -2814,8 +2814,8 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.reply({
           embeds: [
             new EmbedBuilder()
-              .setTitle("⚠️  Already Handled")
-              .setDescription("Another receiver has already handled this offer.")
+              .setTitle("⚠️  Уже обработано")
+              .setDescription("Другой получатель уже обработал это предложение.")
               .setColor(WARNING_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ],
@@ -2823,20 +2823,20 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Notify buyer of decline
+      // Notify buyer of decline (English)
       try {
         const buyer = await client.users.fetch(offer.buyerId);
         await buyer.send({
           embeds: [
             new EmbedBuilder()
-              .setTitle("❌  Предложение отклонено")
+              .setTitle("❌  Offer Declined")
               .setDescription(
-                "К сожалению, получатель **отклонил** ваше предложение брейнротов.\n\n" +
-                "Попробуйте позже или выберите другой способ оплаты через `/buy`."
+                "Unfortunately, the receiver **declined** your brainrot offer.\n\n" +
+                "Try again later or choose a different payment method via `/buy`."
               )
               .addFields(
-                { name: "🐸 Брейнрот",   value: `\`${offer.brainrotInfo}\``, inline: true },
-                { name: "🆔 Offer ID",   value: `\`${offerId}\``,            inline: true }
+                { name: "🐸 Brainrot",  value: `\`${offer.brainrotInfo}\``, inline: true },
+                { name: "🆔 Offer ID",  value: `\`${offerId}\``,            inline: true }
               )
               .setColor(ERROR_COLOR)
               .setFooter({ text: FOOTER_TEXT })
@@ -2896,32 +2896,32 @@ client.on("interactionCreate", async (interaction) => {
 
       const isServer = isPrivateServer(offer.contactInfo);
 
-      // Tell buyer what to do next
+      // Tell buyer what to do next (English)
       const buyerInstructionEmbed = new EmbedBuilder()
-        .setTitle("✅  Вы согласились!")
+        .setTitle("✅  You Agreed!")
         .setColor(SUCCESS_COLOR)
         .setFooter({ text: FOOTER_TEXT })
         .setTimestamp();
 
       if (isServer) {
         buyerInstructionEmbed
-          .setDescription("Отлично! Ждите получателя на **приватном сервере**.")
+          .setDescription("Great! Wait for the receiver on the **private server**.")
           .addFields(
-            { name: "🔗 Ссылка на приватный сервер", value: offer.contactInfo, inline: false },
-            { name: "⏱️ Обещанное время",            value: `\`${offer.offeredLabel}\``, inline: true }
+            { name: "🔗 Private Server Link", value: offer.contactInfo,                   inline: false },
+            { name: "⏱️ Promised Time",       value: `\`${offer.offeredLabel}\``,         inline: true }
           );
       } else {
         buyerInstructionEmbed
-          .setDescription("Отлично! Добавьте получателя в **друзья в Роблоксе**.")
+          .setDescription("Great! Send a **friend request** to the receiver on Roblox.")
           .addFields(
-            { name: "👤 Ник получателя для добавления в друзья", value: `\`${offer.contactInfo}\``, inline: false },
-            { name: "⏱️ Обещанное время",                        value: `\`${offer.offeredLabel}\``, inline: true }
+            { name: "👤 Receiver's Roblox username (add as friend)", value: `\`${offer.contactInfo}\``, inline: false },
+            { name: "⏱️ Promised Time",                              value: `\`${offer.offeredLabel}\``, inline: true }
           );
       }
 
       await interaction.update({ embeds: [buyerInstructionEmbed], components: [] });
 
-      // Notify receiver that buyer agreed, with Grant Time button
+      // Notify receiver that buyer agreed (Russian), with Grant Time button
       try {
         const receiver = await client.users.fetch(offer.receiverId);
         const grantRow = new ActionRowBuilder().addComponents(
@@ -2996,7 +2996,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Notify receiver that buyer declined
+      // Notify receiver that buyer declined (Russian)
       try {
         const receiver = await client.users.fetch(offer.receiverId);
         await receiver.send({
@@ -3022,11 +3022,12 @@ client.on("interactionCreate", async (interaction) => {
 
       brainrotOffers.delete(offerId);
 
+      // Buyer sees English message
       return interaction.update({
         embeds: [
           new EmbedBuilder()
-            .setTitle("❌  Предложение отклонено")
-            .setDescription("Вы отклонили предложение времени. Попробуйте снова через `/buy`.")
+            .setTitle("❌  Offer Declined")
+            .setDescription("You declined the time offer. Try again via `/buy`.")
             .setColor(ERROR_COLOR)
             .setFooter({ text: FOOTER_TEXT })
             .setTimestamp()
@@ -3044,8 +3045,8 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.reply({
           embeds: [
             new EmbedBuilder()
-              .setTitle("⚠️  Offer Expired")
-              .setDescription("This offer has already been completed or no longer exists.")
+              .setTitle("⚠️  Предложение завершено")
+              .setDescription("Это предложение уже выполнено или больше не существует.")
               .setColor(WARNING_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ],
@@ -3057,8 +3058,8 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.reply({
           embeds: [
             new EmbedBuilder()
-              .setTitle("⛔  Access Denied")
-              .setDescription("Only the receiver who accepted this offer can grant time.")
+              .setTitle("⛔  Нет доступа")
+              .setDescription("Только получатель, принявший это предложение, может выдать время.")
               .setColor(ERROR_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ],
@@ -3074,21 +3075,21 @@ client.on("interactionCreate", async (interaction) => {
       const expiresAt  = sub.data ? new Date(sub.data.expires_at) : null;
       const unixExpiry = expiresAt ? Math.floor(expiresAt.getTime() / 1000) : null;
 
-      // Notify buyer
+      // Notify buyer in English
       try {
         const buyer = await client.users.fetch(offer.buyerId);
         await buyer.send({
           embeds: [
             new EmbedBuilder()
-              .setTitle("🎉  Доступ получен!")
+              .setTitle("🎉  Access Granted!")
               .setDescription(
-                `Получатель выдал вам **${offer.offeredLabel}** доступа к Notifier!\n` +
-                `Роль **${ROLE_NOTIFIER_ACCESS}** была выдана вам.`
+                `The receiver has given you **${offer.offeredLabel}** of Notifier access!\n` +
+                `The **${ROLE_NOTIFIER_ACCESS}** role has been assigned to you.`
               )
               .addFields(
-                { name: "⏱️ Время доступа", value: `\`${offer.offeredLabel}\``,                              inline: true  },
-                { name: "📅 Истекает",       value: unixExpiry ? `<t:${unixExpiry}:F>` : "Скоро",            inline: true  },
-                { name: "🐸 Брейнрот",       value: `\`${offer.brainrotInfo}\``,                             inline: false }
+                { name: "⏱️ Access Time",  value: `\`${offer.offeredLabel}\``,                              inline: true  },
+                { name: "📅 Expires",      value: unixExpiry ? `<t:${unixExpiry}:F>` : "Soon",              inline: true  },
+                { name: "🐸 Brainrot",     value: `\`${offer.brainrotInfo}\``,                              inline: false }
               )
               .setColor(SUCCESS_COLOR)
               .setFooter({ text: FOOTER_TEXT })
@@ -3101,6 +3102,7 @@ client.on("interactionCreate", async (interaction) => {
 
       brainrotOffers.delete(offerId);
 
+      // Receiver sees Russian confirmation
       return interaction.update({
         embeds: [
           new EmbedBuilder()
@@ -3715,8 +3717,8 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.editReply({
           embeds: [
             new EmbedBuilder()
-              .setTitle("❌  Недостаточно данных")
-              .setDescription("Пожалуйста, заполните оба поля.")
+              .setTitle("❌  Missing Information")
+              .setDescription("Please fill in both fields.")
               .setColor(ERROR_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ]
@@ -3773,24 +3775,24 @@ client.on("interactionCreate", async (interaction) => {
         }
       }
 
-      // Confirm to buyer
+      // Confirm to buyer (English)
       return interaction.editReply({
         embeds: [
           new EmbedBuilder()
-            .setTitle("🐸  Предложение отправлено!")
+            .setTitle("🐸  Offer Sent!")
             .setDescription(
-              `Ваше предложение брейнротов было отправлено **${sentCount}** получателю(ям).\n` +
-              `Ожидайте ответа в личных сообщениях!`
+              `Your brainrot offer has been sent to **${sentCount}** receiver(s).\n` +
+              `Wait for a response in your direct messages!`
             )
             .addFields(
-              { name: "🎮 Брейнрот",              value: `\`${brainrotInfo}\``,                            inline: false },
-              { name: isPrivateServer(contactInfo) ? "🔗 Приватный сервер" : "👤 Ник",
-                value: isPrivateServer(contactInfo) ? contactInfo : `\`${contactInfo}\``,                  inline: false },
-              { name: "📬 Уведомлено получателей", value: `\`${sentCount}\``,                              inline: true  },
-              { name: "🆔 Offer ID",               value: `\`${offerId}\``,                               inline: true  }
+              { name: "🎮 Brainrot",              value: `\`${brainrotInfo}\``,                              inline: false },
+              { name: isPrivateServer(contactInfo) ? "🔗 Private Server" : "👤 Username",
+                value: isPrivateServer(contactInfo) ? contactInfo : `\`${contactInfo}\``,                    inline: false },
+              { name: "📬 Receivers Notified",    value: `\`${sentCount}\``,                                 inline: true  },
+              { name: "🆔 Offer ID",              value: `\`${offerId}\``,                                   inline: true  }
             )
             .setColor(BRAINROT_COLOR)
-            .setFooter({ text: "Ждите ответа от получателя • " + FOOTER_TEXT })
+            .setFooter({ text: "Waiting for a receiver's response • " + FOOTER_TEXT })
             .setTimestamp()
         ]
       });
@@ -3807,8 +3809,8 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.editReply({
           embeds: [
             new EmbedBuilder()
-              .setTitle("⚠️  Offer Expired")
-              .setDescription("This offer no longer exists or has already been handled.")
+              .setTitle("⚠️  Предложение истекло")
+              .setDescription("Это предложение больше не существует или уже было обработано.")
               .setColor(WARNING_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ]
@@ -3820,8 +3822,8 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.editReply({
           embeds: [
             new EmbedBuilder()
-              .setTitle("⛔  Access Denied")
-              .setDescription("You did not accept this offer.")
+              .setTitle("⛔  Нет доступа")
+              .setDescription("Вы не принимали это предложение.")
               .setColor(ERROR_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ]
@@ -3856,16 +3858,16 @@ client.on("interactionCreate", async (interaction) => {
       offer.offeredLabel = timeLabel;
       brainrotOffers.set(offerId, offer);
 
-      // Send buyer the time offer with Agree/Decline buttons
+      // Send buyer the time offer with Agree/Decline buttons (English labels)
       const buyerRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`brainrot_buyer_agree_${offerId}`)
-          .setLabel("✅ Согласен")
+          .setLabel("✅ Agree")
           .setStyle(ButtonStyle.Success)
           .setEmoji("🤝"),
         new ButtonBuilder()
           .setCustomId(`brainrot_buyer_decline_${offerId}`)
-          .setLabel("❌ Отклонить")
+          .setLabel("❌ Decline")
           .setStyle(ButtonStyle.Danger)
           .setEmoji("🚫")
       );
@@ -3882,6 +3884,7 @@ client.on("interactionCreate", async (interaction) => {
         console.log(`⚠️ Could not DM buyer ${offer.buyerId} about time offer`);
       }
 
+      // Receiver sees Russian confirmation
       return interaction.editReply({
         embeds: [
           new EmbedBuilder()
