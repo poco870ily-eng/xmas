@@ -42,6 +42,7 @@ const STOCK_CHANNEL_ID   = "1474349576814334047";
 const ROLE_ACCESS           = "Pay Access";
 const ROLE_ACCESS_PLUS      = "Pay Access+";
 const ROLE_NOTIFIER_ACCESS  = "Access";
+const ROLE_RECEIVER         = "Receiver";
 
 // ===== (ОПЦИОНАЛЬНО) ROLE IDs =====
 const USE_ROLE_IDS        = false;
@@ -51,6 +52,10 @@ const ROLE_ID_ACCESS_PLUS = process.env.ROLE_ID_ACCESS_PLUS || "";
 // ===== PAUSE STATE =====
 let isPaused       = false;
 let pauseStartTime = null;
+
+// ===== BRAINROT OFFERS STATE =====
+// offerId -> { buyerId, brainrotInfo, contactInfo, receiverId, offeredMs, offeredLabel }
+const brainrotOffers = new Map();
 
 // ===== SUPABASE =====
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -559,6 +564,42 @@ async function getAccessPlusUsers() {
   }
 
   console.log(`📊 Total Pay Access+ users found: ${users.length}`);
+  return users;
+}
+
+// ===== RECEIVER ROLE HELPERS =====
+async function getReceiverUsers() {
+  const seen  = new Set();
+  const users = [];
+
+  for (const [, guild] of client.guilds.cache) {
+    try {
+      await guild.roles.fetch();
+      await guild.members.fetch({ force: true });
+    } catch (e) {
+      console.error(`❌ Could not fetch data for guild "${guild.name}":`, e.message);
+      continue;
+    }
+
+    const role = guild.roles.cache.find(
+      r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_RECEIVER)
+    );
+
+    if (!role) {
+      console.warn(`⚠️ Role "${ROLE_RECEIVER}" not found in guild "${guild.name}".`);
+      continue;
+    }
+
+    for (const [, member] of guild.members.cache) {
+      if (!member.roles.cache.has(role.id)) continue;
+      if (seen.has(member.id)) continue;
+      seen.add(member.id);
+      users.push(member.user);
+      console.log(`📦 Receiver user found: ${member.user.tag}`);
+    }
+  }
+
+  console.log(`📊 Total Receiver users found: ${users.length}`);
   return users;
 }
 
@@ -1163,6 +1204,7 @@ const FUNPAY_COLOR   = 0xFF6B35;
 const ACCESS_COLOR   = 0x00BCD4;
 const PAUSE_COLOR    = 0xFF8C00;
 const COUPON_COLOR   = 0x1ABC9C;
+const BRAINROT_COLOR = 0xFF4FA3;
 
 const FOOTER_TEXT = "⚡ Nameless Paysystem";
 
@@ -1188,6 +1230,16 @@ function parseTimeString(str) {
   if (hMatch) totalMs += parseInt(hMatch[1]) * 60 * 60 * 1000;
   if (mMatch) totalMs += parseInt(mMatch[1]) * 60 * 1000;
   return totalMs;
+}
+
+// Generate unique offer ID for brainrot trades
+function generateOfferId() {
+  return crypto.randomBytes(6).toString("hex").toUpperCase();
+}
+
+// Detect if contact info is a private server link
+function isPrivateServer(contact) {
+  return contact.toLowerCase().startsWith("https");
 }
 
 // ===== EMBEDS =====
@@ -1424,7 +1476,12 @@ function buildPaymentMethodMenu() {
       .setLabel("🎮 Pay via FunPay")
       .setDescription("Purchase from our resellers")
       .setValue("funpay")
-      .setEmoji("🛒")
+      .setEmoji("🛒"),
+    new StringSelectMenuOptionBuilder()
+      .setLabel("🐸 Pay with Brainrots")
+      .setDescription("Trade your Roblox brainrots for access time")
+      .setValue("brainrot")
+      .setEmoji("🐸")
   ];
 
   return new ActionRowBuilder().addComponents(
@@ -1530,6 +1587,102 @@ function buildKeyListButtons(page, totalPages, storageId) {
   }
 
   return new ActionRowBuilder().addComponents(...buttons);
+}
+
+// ===== BRAINROT UI BUILDERS =====
+
+/**
+ * Modal shown to buyer when they choose "Pay with Brainrots"
+ */
+function buildBrainrotOfferModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("modal_brainrot_offer")
+    .setTitle("🐸 Предложить брейнротов");
+
+  const brainrotInput = new TextInputBuilder()
+    .setCustomId("brainrot_info")
+    .setLabel("Имя брейнрота и его генерация")
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder("Например: Skibidi Toilet $1B/s")
+    .setRequired(true)
+    .setMaxLength(100);
+
+  const contactInput = new TextInputBuilder()
+    .setCustomId("brainrot_contact")
+    .setLabel("Приватный сервер или ник в Роблоксе")
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder("https://ro.blox.com/... или ваш ник в Роблоксе")
+    .setRequired(true)
+    .setMaxLength(200);
+
+  modal.addComponents(
+    new ActionRowBuilder().addComponents(brainrotInput),
+    new ActionRowBuilder().addComponents(contactInput)
+  );
+
+  return modal;
+}
+
+/**
+ * Modal shown to the receiver when they accept — they enter how much time they offer
+ */
+function buildBrainrotTimeOfferModal(offerId) {
+  const modal = new ModalBuilder()
+    .setCustomId(`modal_brainrot_time_${offerId}`)
+    .setTitle("⏱️ Сколько времени вы предлагаете?");
+
+  const timeInput = new TextInputBuilder()
+    .setCustomId("offered_time")
+    .setLabel("Время доступа (d=дни, h=часы, m=минуты)")
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder("Например: 7d  /  3h  /  1d 12h  /  30m")
+    .setRequired(true)
+    .setMaxLength(30);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(timeInput));
+  return modal;
+}
+
+/**
+ * Embed + buttons sent to all Receiver users when a buyer submits a brainrot offer
+ */
+function buildReceiverOfferEmbed(buyerUser, brainrotInfo, contactInfo, offerId) {
+  const isServer = isPrivateServer(contactInfo);
+
+  return new EmbedBuilder()
+    .setTitle("🐸  Новое предложение брейнротами!")
+    .setDescription(
+      `Покупатель <@${buyerUser.id}> предлагает брейнротов в обмен на время доступа.`
+    )
+    .addFields(
+      { name: "🎮 Брейнрот",          value: `\`${brainrotInfo}\``,          inline: false },
+      { name: isServer ? "🔗 Приватный сервер" : "👤 Ник в Роблоксе",
+        value: isServer ? contactInfo : `\`${contactInfo}\``,                 inline: false },
+      { name: "🆔 Offer ID",          value: `\`${offerId}\``,               inline: true },
+      { name: "👤 Покупатель",        value: `<@${buyerUser.id}>`,           inline: true }
+    )
+    .setColor(BRAINROT_COLOR)
+    .setFooter({ text: `Нажмите «Принять», чтобы предложить время • ${FOOTER_TEXT}` })
+    .setTimestamp();
+}
+
+/**
+ * Embed sent to buyer showing the time offer from receiver, with Agree/Decline buttons
+ */
+function buildBuyerTimeOfferEmbed(receiverUser, offeredLabel, offerId) {
+  return new EmbedBuilder()
+    .setTitle("⏱️  Получатель предложил время!")
+    .setDescription(
+      `Получатель рассмотрел ваше предложение брейнротов и готов дать вам доступ.`
+    )
+    .addFields(
+      { name: "🕐 Предложенное время", value: `\`${offeredLabel}\``,          inline: true },
+      { name: "👤 Получатель",         value: `<@${receiverUser.id}>`,        inline: true },
+      { name: "🆔 Offer ID",           value: `\`${offerId}\``,               inline: false }
+    )
+    .setColor(BRAINROT_COLOR)
+    .setFooter({ text: `Примите или отклоните предложение • ${FOOTER_TEXT}` })
+    .setTimestamp();
 }
 
 // ===== PENDING PAYMENTS =====
@@ -1770,7 +1923,8 @@ client.on("interactionCreate", async (interaction) => {
         .setDescription(
           "**Step 1 / 2** — Choose your payment method.\n\n" +
           "💰 **Balance** — Use your account balance (instant delivery)\n" +
-          "🎮 **FunPay** — Purchase from our trusted resellers"
+          "🎮 **FunPay** — Purchase from our trusted resellers\n" +
+          "🐸 **Brainrots** — Trade your Roblox brainrots for access time"
         )
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT })
@@ -2584,7 +2738,8 @@ client.on("interactionCreate", async (interaction) => {
         .setDescription(
           "**Step 1 / 2** — Choose your payment method.\n\n" +
           "💰 **Balance** — Use your account balance (instant delivery)\n" +
-          "🎮 **FunPay** — Purchase from our trusted resellers"
+          "🎮 **FunPay** — Purchase from our trusted resellers\n" +
+          "🐸 **Brainrots** — Trade your Roblox brainrots for access time"
         )
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT })
@@ -2594,6 +2749,375 @@ client.on("interactionCreate", async (interaction) => {
         embeds: [embed],
         components: [buildPaymentMethodMenu()],
         ephemeral: true
+      });
+    }
+
+    // ── Brainrot: Receiver clicks Accept ──
+    if (interaction.customId.startsWith("brainrot_accept_")) {
+      const offerId = interaction.customId.slice("brainrot_accept_".length);
+      const offer   = brainrotOffers.get(offerId);
+
+      if (!offer) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  Offer Expired")
+              .setDescription("This offer no longer exists or has already been handled.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      if (offer.receiverId) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  Already Accepted")
+              .setDescription("Another receiver has already accepted this offer.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      // Mark this receiver as the one who accepted
+      offer.receiverId = interaction.user.id;
+      brainrotOffers.set(offerId, offer);
+
+      // Show modal asking the receiver how much time they offer
+      return interaction.showModal(buildBrainrotTimeOfferModal(offerId));
+    }
+
+    // ── Brainrot: Receiver clicks Decline ──
+    if (interaction.customId.startsWith("brainrot_decline_")) {
+      const offerId = interaction.customId.slice("brainrot_decline_".length);
+      const offer   = brainrotOffers.get(offerId);
+
+      if (!offer) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  Offer Expired")
+              .setDescription("This offer no longer exists.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      // Don't let receiver decline if another already accepted
+      if (offer.receiverId && offer.receiverId !== interaction.user.id) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  Already Handled")
+              .setDescription("Another receiver has already handled this offer.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      // Notify buyer of decline
+      try {
+        const buyer = await client.users.fetch(offer.buyerId);
+        await buyer.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Предложение отклонено")
+              .setDescription(
+                "К сожалению, получатель **отклонил** ваше предложение брейнротов.\n\n" +
+                "Попробуйте позже или выберите другой способ оплаты через `/buy`."
+              )
+              .addFields(
+                { name: "🐸 Брейнрот",   value: `\`${offer.brainrotInfo}\``, inline: true },
+                { name: "🆔 Offer ID",   value: `\`${offerId}\``,            inline: true }
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      } catch {
+        console.log(`⚠️ Could not DM buyer ${offer.buyerId} about decline`);
+      }
+
+      brainrotOffers.delete(offerId);
+
+      return interaction.update({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("❌  Предложение отклонено")
+            .setDescription(`Вы отклонили предложение брейнротов. Покупатель уведомлён.`)
+            .setColor(ERROR_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ],
+        components: []
+      });
+    }
+
+    // ── Brainrot: Buyer agrees to the offered time ──
+    if (interaction.customId.startsWith("brainrot_buyer_agree_")) {
+      const offerId = interaction.customId.slice("brainrot_buyer_agree_".length);
+      const offer   = brainrotOffers.get(offerId);
+
+      if (!offer) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  Offer Expired")
+              .setDescription("This offer no longer exists.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      // Make sure it's the actual buyer responding
+      if (interaction.user.id !== offer.buyerId) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Not Your Offer")
+              .setDescription("This offer does not belong to you.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      const isServer = isPrivateServer(offer.contactInfo);
+
+      // Tell buyer what to do next
+      const buyerInstructionEmbed = new EmbedBuilder()
+        .setTitle("✅  Вы согласились!")
+        .setColor(SUCCESS_COLOR)
+        .setFooter({ text: FOOTER_TEXT })
+        .setTimestamp();
+
+      if (isServer) {
+        buyerInstructionEmbed
+          .setDescription("Отлично! Ждите получателя на **приватном сервере**.")
+          .addFields(
+            { name: "🔗 Ссылка на приватный сервер", value: offer.contactInfo, inline: false },
+            { name: "⏱️ Обещанное время",            value: `\`${offer.offeredLabel}\``, inline: true }
+          );
+      } else {
+        buyerInstructionEmbed
+          .setDescription("Отлично! Добавьте получателя в **друзья в Роблоксе**.")
+          .addFields(
+            { name: "👤 Ник получателя для добавления в друзья", value: `\`${offer.contactInfo}\``, inline: false },
+            { name: "⏱️ Обещанное время",                        value: `\`${offer.offeredLabel}\``, inline: true }
+          );
+      }
+
+      await interaction.update({ embeds: [buyerInstructionEmbed], components: [] });
+
+      // Notify receiver that buyer agreed, with Grant Time button
+      try {
+        const receiver = await client.users.fetch(offer.receiverId);
+        const grantRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`brainrot_grant_${offerId}`)
+            .setLabel("✅ Выдать время покупателю")
+            .setStyle(ButtonStyle.Success)
+            .setEmoji("🎁")
+        );
+
+        await receiver.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🤝  Покупатель согласился!")
+              .setDescription(
+                `Покупатель принял ваше предложение и готов к обмену.\n\n` +
+                (isServer
+                  ? `Он уже ждёт вас на приватном сервере по ссылке ниже.`
+                  : `Он добавит вас в друзья в Роблоксе.`)
+              )
+              .addFields(
+                { name: "👤 Покупатель",      value: `<@${offer.buyerId}>`,       inline: true  },
+                { name: "🐸 Брейнрот",        value: `\`${offer.brainrotInfo}\``, inline: true  },
+                { name: "⏱️ Обещанное время", value: `\`${offer.offeredLabel}\``, inline: false },
+                {
+                  name:  isServer ? "🔗 Приватный сервер" : "👤 Ник покупателя",
+                  value: isServer ? offer.contactInfo : `\`${offer.contactInfo}\``,
+                  inline: false
+                }
+              )
+              .setColor(SUCCESS_COLOR)
+              .setFooter({ text: `Нажмите кнопку ниже, чтобы выдать время • ${FOOTER_TEXT}` })
+              .setTimestamp()
+          ],
+          components: [grantRow]
+        });
+      } catch {
+        console.log(`⚠️ Could not DM receiver ${offer.receiverId} about agreement`);
+      }
+
+      return;
+    }
+
+    // ── Brainrot: Buyer declines the offered time ──
+    if (interaction.customId.startsWith("brainrot_buyer_decline_")) {
+      const offerId = interaction.customId.slice("brainrot_buyer_decline_".length);
+      const offer   = brainrotOffers.get(offerId);
+
+      if (!offer) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  Offer Expired")
+              .setDescription("This offer no longer exists.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      if (interaction.user.id !== offer.buyerId) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Not Your Offer")
+              .setDescription("This offer does not belong to you.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      // Notify receiver that buyer declined
+      try {
+        const receiver = await client.users.fetch(offer.receiverId);
+        await receiver.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Покупатель отказался")
+              .setDescription(
+                `Покупатель отклонил ваше предложение времени **\`${offer.offeredLabel}\`**.\n` +
+                `Сделка отменена.`
+              )
+              .addFields(
+                { name: "🐸 Брейнрот",   value: `\`${offer.brainrotInfo}\``, inline: true },
+                { name: "🆔 Offer ID",   value: `\`${offerId}\``,            inline: true }
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      } catch {
+        console.log(`⚠️ Could not DM receiver ${offer.receiverId} about buyer decline`);
+      }
+
+      brainrotOffers.delete(offerId);
+
+      return interaction.update({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("❌  Предложение отклонено")
+            .setDescription("Вы отклонили предложение времени. Попробуйте снова через `/buy`.")
+            .setColor(ERROR_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ],
+        components: []
+      });
+    }
+
+    // ── Brainrot: Receiver grants time to buyer ──
+    if (interaction.customId.startsWith("brainrot_grant_")) {
+      const offerId = interaction.customId.slice("brainrot_grant_".length);
+      const offer   = brainrotOffers.get(offerId);
+
+      if (!offer) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  Offer Expired")
+              .setDescription("This offer has already been completed or no longer exists.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      if (interaction.user.id !== offer.receiverId) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription("Only the receiver who accepted this offer can grant time.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      // Give buyer the subscription time
+      await addSubscriptionMs(offer.buyerId, offer.offeredMs);
+      await giveNotifierRole(offer.buyerId, null);
+
+      const sub        = await supabase.from("subscriptions").select("expires_at").eq("user_id", offer.buyerId.toString()).single();
+      const expiresAt  = sub.data ? new Date(sub.data.expires_at) : null;
+      const unixExpiry = expiresAt ? Math.floor(expiresAt.getTime() / 1000) : null;
+
+      // Notify buyer
+      try {
+        const buyer = await client.users.fetch(offer.buyerId);
+        await buyer.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🎉  Доступ получен!")
+              .setDescription(
+                `Получатель выдал вам **${offer.offeredLabel}** доступа к Notifier!\n` +
+                `Роль **${ROLE_NOTIFIER_ACCESS}** была выдана вам.`
+              )
+              .addFields(
+                { name: "⏱️ Время доступа", value: `\`${offer.offeredLabel}\``,                              inline: true  },
+                { name: "📅 Истекает",       value: unixExpiry ? `<t:${unixExpiry}:F>` : "Скоро",            inline: true  },
+                { name: "🐸 Брейнрот",       value: `\`${offer.brainrotInfo}\``,                             inline: false }
+              )
+              .setColor(SUCCESS_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      } catch {
+        console.log(`⚠️ Could not DM buyer ${offer.buyerId} about time grant`);
+      }
+
+      brainrotOffers.delete(offerId);
+
+      return interaction.update({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("✅  Время выдано!")
+            .setDescription(
+              `Вы успешно выдали **${offer.offeredLabel}** покупателю <@${offer.buyerId}>.\n` +
+              `Сделка завершена!`
+            )
+            .addFields(
+              { name: "👤 Покупатель",      value: `<@${offer.buyerId}>`,        inline: true },
+              { name: "⏱️ Выдано времени",  value: `\`${offer.offeredLabel}\``, inline: true }
+            )
+            .setColor(SUCCESS_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ],
+        components: []
       });
     }
 
@@ -2975,6 +3499,12 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
+      // ── NEW: Brainrot payment method ──
+      if (method === "brainrot") {
+        // Show the modal immediately (cannot call update AND showModal)
+        return interaction.showModal(buildBrainrotOfferModal());
+      }
+
       if (method === "balance") {
         if (interaction.guildId === RESTRICTED_GUILD_ID) {
           const product  = PRODUCTS["notifier"];
@@ -3172,6 +3702,204 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.deferReply({ flags: 64 });
       await processPayment(interaction, userId, amount, pending.currency);
       return;
+    }
+
+    // ===== MODAL: Brainrot offer submission (from buyer) =====
+    if (interaction.customId === "modal_brainrot_offer") {
+      await interaction.deferReply({ flags: 64 });
+
+      const brainrotInfo = interaction.fields.getTextInputValue("brainrot_info").trim();
+      const contactInfo  = interaction.fields.getTextInputValue("brainrot_contact").trim();
+
+      if (!brainrotInfo || !contactInfo) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Недостаточно данных")
+              .setDescription("Пожалуйста, заполните оба поля.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const offerId = generateOfferId();
+      brainrotOffers.set(offerId, {
+        buyerId:      interaction.user.id,
+        brainrotInfo,
+        contactInfo,
+        receiverId:   null,
+        offeredMs:    null,
+        offeredLabel: null
+      });
+
+      // Auto-expire offer after 1 hour to avoid stale data
+      setTimeout(() => {
+        if (brainrotOffers.has(offerId)) {
+          brainrotOffers.delete(offerId);
+          console.log(`🗑️ Brainrot offer ${offerId} auto-expired.`);
+        }
+      }, 60 * 60 * 1000);
+
+      // Build Accept/Decline buttons for receivers
+      const receiverRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`brainrot_accept_${offerId}`)
+          .setLabel("✅ Принять")
+          .setStyle(ButtonStyle.Success)
+          .setEmoji("🤝"),
+        new ButtonBuilder()
+          .setCustomId(`brainrot_decline_${offerId}`)
+          .setLabel("❌ Отклонить")
+          .setStyle(ButtonStyle.Danger)
+          .setEmoji("🚫")
+      );
+
+      const offerEmbed = buildReceiverOfferEmbed(interaction.user, brainrotInfo, contactInfo, offerId);
+
+      // Send to all Receiver role users
+      const receivers = await getReceiverUsers();
+      let sentCount   = 0;
+
+      for (const receiverUser of receivers) {
+        try {
+          await receiverUser.send({
+            embeds: [offerEmbed],
+            components: [receiverRow]
+          });
+          sentCount++;
+        } catch {
+          console.log(`⚠️ Could not DM receiver ${receiverUser.tag}`);
+        }
+      }
+
+      // Confirm to buyer
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("🐸  Предложение отправлено!")
+            .setDescription(
+              `Ваше предложение брейнротов было отправлено **${sentCount}** получателю(ям).\n` +
+              `Ожидайте ответа в личных сообщениях!`
+            )
+            .addFields(
+              { name: "🎮 Брейнрот",              value: `\`${brainrotInfo}\``,                            inline: false },
+              { name: isPrivateServer(contactInfo) ? "🔗 Приватный сервер" : "👤 Ник",
+                value: isPrivateServer(contactInfo) ? contactInfo : `\`${contactInfo}\``,                  inline: false },
+              { name: "📬 Уведомлено получателей", value: `\`${sentCount}\``,                              inline: true  },
+              { name: "🆔 Offer ID",               value: `\`${offerId}\``,                               inline: true  }
+            )
+            .setColor(BRAINROT_COLOR)
+            .setFooter({ text: "Ждите ответа от получателя • " + FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
+    }
+
+    // ===== MODAL: Receiver enters offered time =====
+    if (interaction.customId.startsWith("modal_brainrot_time_")) {
+      await interaction.deferReply({ flags: 64 });
+
+      const offerId  = interaction.customId.slice("modal_brainrot_time_".length);
+      const offer    = brainrotOffers.get(offerId);
+
+      if (!offer) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⚠️  Offer Expired")
+              .setDescription("This offer no longer exists or has already been handled.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      // Verify this is the receiver who accepted
+      if (offer.receiverId !== interaction.user.id) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Access Denied")
+              .setDescription("You did not accept this offer.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const timeStr    = interaction.fields.getTextInputValue("offered_time").trim();
+      const totalMs    = parseTimeString(timeStr);
+      const timeLabel  = formatDuration(totalMs);
+
+      if (!totalMs || totalMs <= 0) {
+        // Reset receiverId so another receiver can try
+        offer.receiverId = null;
+        brainrotOffers.set(offerId, offer);
+
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Неверный формат времени")
+              .setDescription(
+                "Не удалось распознать время. Используйте форматы:\n" +
+                "`7d` — 7 дней\n`3h` — 3 часа\n`30m` — 30 минут\n`1d 12h` — 1 день 12 часов"
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      // Save offered time in the offer state
+      offer.offeredMs    = totalMs;
+      offer.offeredLabel = timeLabel;
+      brainrotOffers.set(offerId, offer);
+
+      // Send buyer the time offer with Agree/Decline buttons
+      const buyerRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`brainrot_buyer_agree_${offerId}`)
+          .setLabel("✅ Согласен")
+          .setStyle(ButtonStyle.Success)
+          .setEmoji("🤝"),
+        new ButtonBuilder()
+          .setCustomId(`brainrot_buyer_decline_${offerId}`)
+          .setLabel("❌ Отклонить")
+          .setStyle(ButtonStyle.Danger)
+          .setEmoji("🚫")
+      );
+
+      let buyerDmSent = false;
+      try {
+        const buyer = await client.users.fetch(offer.buyerId);
+        await buyer.send({
+          embeds: [buildBuyerTimeOfferEmbed(interaction.user, timeLabel, offerId)],
+          components: [buyerRow]
+        });
+        buyerDmSent = true;
+      } catch {
+        console.log(`⚠️ Could not DM buyer ${offer.buyerId} about time offer`);
+      }
+
+      return interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("⏱️  Предложение отправлено покупателю!")
+            .setDescription(
+              buyerDmSent
+                ? `Покупатель получил ваше предложение — **${timeLabel}** доступа.\nОжидайте его ответа.`
+                : `Предложение создано, но не удалось отправить покупателю (возможно, закрыты ЛС).`
+            )
+            .addFields(
+              { name: "⏱️ Предложенное время", value: `\`${timeLabel}\``, inline: true },
+              { name: "🆔 Offer ID",           value: `\`${offerId}\``,   inline: true }
+            )
+            .setColor(BRAINROT_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
     }
 
     // ===== MODAL: changetime =====
