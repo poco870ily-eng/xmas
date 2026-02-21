@@ -559,15 +559,15 @@ async function getBrainrotUsers() {
   const users = [];
 
   for (const [, guild] of client.guilds.cache) {
-    // Step 1: fetch all roles
+    // Сначала загружаем ВСЕХ участников — это заполнит roles.cache у каждого
     try {
-      await guild.roles.fetch();
+      await guild.members.fetch();
     } catch (e) {
-      console.error(`❌ Could not fetch roles for guild "${guild.name}":`, e.message);
+      console.error(`❌ Could not fetch members for guild "${guild.name}":`, e.message);
       continue;
     }
 
-    // Find the Brainrot role
+    // Теперь роли участников в кеше актуальны — ищем роль
     const role = guild.roles.cache.find(
       r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_BRAINROT)
     );
@@ -582,18 +582,8 @@ async function getBrainrotUsers() {
 
     console.log(`✅ Found Brainrot role "${role.name}" (${role.id}) in guild "${guild.name}"`);
 
-    // Step 2: fetch ALL members so the cache is fully populated
-    try {
-      await guild.members.fetch({ force: true });
-    } catch (e) {
-      console.error(`❌ Could not fetch members for guild "${guild.name}":`, e.message);
-      continue;
-    }
-
-    // Step 3: iterate guild.members.cache directly and check role membership
-    // (role.members may be stale; members.cache is always up-to-date after fetch)
-    for (const [, member] of guild.members.cache) {
-      if (!member.roles.cache.has(role.id)) continue;
+    // role.members актуален после guild.members.fetch()
+    for (const [, member] of role.members) {
       if (seen.has(member.id)) continue;
       seen.add(member.id);
       users.push(member.user);
@@ -2137,7 +2127,7 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // ===== /changetime — FIXED: showModal called immediately, no async before it =====
+    // ===== /changetime — FIXED: лейбл укорочен до 43 символов (лимит Discord 45) =====
     if (commandName === "changetime") {
       try {
         const targetUser = interaction.options.getUser("user");
@@ -2146,9 +2136,10 @@ client.on("interactionCreate", async (interaction) => {
           .setCustomId(`modal_changetime_${targetUser.id}`)
           .setTitle(`Set Time — ${targetUser.username}`);
 
+        // FIX: лейбл был 47 символов → Discord выбрасывал исключение → showModal падал
         const input = new TextInputBuilder()
           .setCustomId("changetime_input")
-          .setLabel("New time from NOW (e.g. 7d / 3h / 1d 12h / 30m)")
+          .setLabel("From now (e.g. 7d / 3h / 1d 12h / 30m)")
           .setStyle(TextInputStyle.Short)
           .setPlaceholder("Examples: 7d  |  3h  |  1d 12h  |  30m  |  2d 6h 30m")
           .setRequired(true);
@@ -2157,7 +2148,6 @@ client.on("interactionCreate", async (interaction) => {
         return await interaction.showModal(modal);
       } catch (err) {
         console.error("❌ /changetime showModal error:", err.message);
-        // If modal failed, try to reply with an error
         try {
           if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({
@@ -2717,7 +2707,7 @@ client.on("interactionCreate", async (interaction) => {
 
       const robloxInput = new TextInputBuilder()
         .setCustomId("roblox_info")
-        .setLabel("Roblox private server link OR your username")
+        .setLabel("Roblox private server link OR username")
         .setStyle(TextInputStyle.Short)
         .setPlaceholder("e.g. https://www.roblox.com/... OR YourRobloxUsername")
         .setRequired(true);
@@ -2758,7 +2748,7 @@ client.on("interactionCreate", async (interaction) => {
 
       const timeInput = new TextInputBuilder()
         .setCustomId("brainrot_time_input")
-        .setLabel("Время нотифаера (например: 7d / 3h / 1d 12h)")
+        .setLabel("Время нотифаера (7d / 3h / 1d 12h)")
         .setStyle(TextInputStyle.Short)
         .setPlaceholder("Примеры: 3d  |  7d  |  14d  |  1d 12h  |  6h")
         .setRequired(true);
@@ -3415,12 +3405,11 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // ===== MODAL: changetime — FIXED with try/catch =====
+    // ===== MODAL: changetime =====
     if (interaction.customId.startsWith("modal_changetime_")) {
       try {
         await interaction.deferReply({ flags: 64 });
 
-        // Access check happens AFTER deferReply so no timeout risk
         const accessTier = await getAccessTier(interaction.user.id);
         if (!accessTier) {
           return interaction.editReply({
@@ -3457,7 +3446,6 @@ client.on("interactionCreate", async (interaction) => {
         const unixExpiry = Math.floor(newExpiry.getTime() / 1000);
         const timeLabel  = formatDuration(totalMs);
 
-        // Upsert: create or update subscription regardless of current state
         const { error: upsertError } = await supabase
           .from("subscriptions")
           .upsert(
@@ -3478,7 +3466,6 @@ client.on("interactionCreate", async (interaction) => {
           });
         }
 
-        // DM the target user
         try {
           const targetUser = await client.users.fetch(targetUserId);
           await targetUser.send({
@@ -3580,7 +3567,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      // Get Brainrot staff using the FIXED function
+      // FIX: используем исправленную функцию getBrainrotUsers
       const brainrotUsers = await getBrainrotUsers();
 
       if (brainrotUsers.length === 0) {
