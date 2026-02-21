@@ -497,20 +497,25 @@ async function getAccessTier(userId) {
   if (userId === OWNER_ID) return "plus";
 
   for (const [, guild] of client.guilds.cache) {
-    let member;
     try {
-      member = await guild.members.fetch({ user: userId, force: true });
-    } catch {
+      await guild.roles.fetch();
+      const member = await guild.members.fetch({ user: userId, force: true });
+
+      console.log(
+        `[DEBUG getAccessTier] User ${userId} in "${guild.name}" roles:`,
+        member.roles.cache.map(r => `"${r.name}"`).join(", ") || "none"
+      );
+      console.log(
+        `[DEBUG getAccessTier] Guild "${guild.name}" all roles:`,
+        guild.roles.cache.map(r => `"${r.name}"`).join(", ")
+      );
+
+      if (memberHasRole(member, ROLE_ACCESS_PLUS, ROLE_ID_ACCESS_PLUS)) return "plus";
+      if (memberHasRole(member, ROLE_ACCESS,      ROLE_ID_ACCESS))      return "basic";
+    } catch (e) {
+      console.error(`[DEBUG getAccessTier] Error in guild "${guild.name}":`, e.message);
       continue;
     }
-
-    console.log(
-      `[DEBUG getAccessTier] User ${userId} in "${guild.name}" has roles:`,
-      member.roles.cache.map(r => `"${r.name}" (${r.id})`).join(", ") || "none"
-    );
-
-    if (memberHasRole(member, ROLE_ACCESS_PLUS, ROLE_ID_ACCESS_PLUS)) return "plus";
-    if (memberHasRole(member, ROLE_ACCESS,      ROLE_ID_ACCESS))      return "basic";
   }
 
   return null;
@@ -522,9 +527,10 @@ async function getAccessPlusUsers() {
 
   for (const [, guild] of client.guilds.cache) {
     try {
-      await guild.members.fetch({ force: true });
+      await guild.roles.fetch();
+      await guild.members.fetch();
     } catch (e) {
-      console.error(`❌ Could not fetch members for guild "${guild.name}":`, e.message);
+      console.error(`❌ Could not fetch data for guild "${guild.name}":`, e.message);
       continue;
     }
 
@@ -538,18 +544,21 @@ async function getAccessPlusUsers() {
     }
 
     if (!role) {
-      console.warn(`⚠️ Role "${ROLE_ACCESS_PLUS}" not found in guild "${guild.name}"`);
+      console.warn(`⚠️ Role "${ROLE_ACCESS_PLUS}" not found in guild "${guild.name}". Available: ${guild.roles.cache.map(r => r.name).join(", ")}`);
       continue;
     }
 
-    for (const [, member] of guild.members.cache) {
-      if (!member.roles.cache.has(role.id)) continue;
+    console.log(`✅ Found Pay Access+ role "${role.name}" (${role.id}) in "${guild.name}"`);
+
+    for (const [, member] of role.members) {
       if (seen.has(member.id)) continue;
       seen.add(member.id);
       users.push(member.user);
+      console.log(`👤 Pay Access+ user: ${member.user.tag}`);
     }
   }
 
+  console.log(`📊 Total Pay Access+ users: ${users.length}`);
   return users;
 }
 
@@ -2528,11 +2537,14 @@ client.on("interactionCreate", async (interaction) => {
 
       for (const [, guild] of client.guilds.cache) {
         try {
-          await guild.members.fetch({ force: true });
+          await guild.roles.fetch();
+          await guild.members.fetch();
         } catch (e) {
-          console.error(`❌ Could not fetch members for guild "${guild.name}":`, e.message);
+          console.error(`❌ Could not fetch data for guild "${guild.name}":`, e.message);
           continue;
         }
+
+        console.log(`[viewadmins] Guild "${guild.name}" roles: ${guild.roles.cache.map(r => r.name).join(", ")}`);
 
         let roleBasic, rolePlus;
 
@@ -2544,12 +2556,18 @@ client.on("interactionCreate", async (interaction) => {
           rolePlus  = guild.roles.cache.find(r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_ACCESS_PLUS));
         }
 
-        for (const [, member] of guild.members.cache) {
-          if (seen.has(member.id)) continue;
-          if (rolePlus && member.roles.cache.has(rolePlus.id)) {
+        console.log(`[viewadmins] roleBasic=${roleBasic?.name}, rolePlus=${rolePlus?.name}`);
+
+        if (rolePlus) {
+          for (const [, member] of rolePlus.members) {
+            if (seen.has(member.id)) continue;
             seen.add(member.id);
             plusUsers.push({ tag: member.user.tag, id: member.id, guild: guild.name });
-          } else if (roleBasic && member.roles.cache.has(roleBasic.id)) {
+          }
+        }
+        if (roleBasic) {
+          for (const [, member] of roleBasic.members) {
+            if (seen.has(member.id)) continue;
             seen.add(member.id);
             basicUsers.push({ tag: member.user.tag, id: member.id, guild: guild.name });
           }
