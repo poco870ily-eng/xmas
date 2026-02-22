@@ -562,10 +562,9 @@ async function getAccessPlusUsers() {
       continue;
     }
 
-    console.log(`✅ Found Pay Access+ role "${role.name}" (${role.id}) in "${guild.name}"`);
+    console.log(`✅ Found Pay Access+ role "${role.name}" (${role.id}) in "${guild.name}" — ${role.members.size} member(s)`);
 
-    for (const [, member] of guild.members.cache) {
-      if (!member.roles.cache.has(role.id)) continue;
+    for (const [, member] of role.members) {
       if (seen.has(member.id)) continue;
       seen.add(member.id);
       users.push(member.user);
@@ -4775,9 +4774,18 @@ app.post("/webhook", async (req, res) => {
       }
 
       if (success) {
-        const payerUser = await client.users.fetch(userId).catch(() => null);
-        if (payerUser) {
-          const notifyEmbed = buildPaymentNotifyEmbed(payerUser, amount, newBalance, payment_id);
+        let payerUser = null;
+        try { payerUser = await client.users.fetch(userId); } catch (e) {
+          console.warn(`⚠️ Could not fetch payer user ${userId}:`, e.message);
+        }
+
+        {
+          const notifyEmbed = buildPaymentNotifyEmbed(
+            payerUser ?? { id: userId, tag: `Unknown (${userId})` },
+            amount,
+            newBalance,
+            payment_id
+          );
           const plusUsers   = await getAccessPlusUsers();
 
           let notified = 0;
@@ -4790,7 +4798,7 @@ app.post("/webhook", async (req, res) => {
               console.log(`⚠️ Could not DM Pay Access+ user ${user.tag}:`, err.message);
             }
           }
-          console.log(`📣 Notified ${notified} Pay Access+ member(s) about payment by ${payerUser.tag}`);
+          console.log(`📣 Notified ${notified} Pay Access+ member(s) about payment by ${payerUser?.tag ?? userId}`);
         }
       }
 
