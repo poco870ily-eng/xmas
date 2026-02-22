@@ -437,26 +437,26 @@ client.on("channelCreate", async (channel) => {
     await new Promise(resolve => setTimeout(resolve, 2000));
 
     const welcomeEmbed = new EmbedBuilder()
-      .setTitle("🎫  Welcome to the Ticket System!")
+      .setTitle("🎫  Добро пожаловать! / Welcome!")
       .setDescription(
-        "**Hello!** I'm here to help you with purchases and account management.\n\n" +
-        "**Quick Start Guide:**"
-      )
-      .addFields(
-        { name: "💳  Top Up Your Balance",      value: "Use `/pay` to add funds via cryptocurrency", inline: false },
-        { name: "🛒  Purchase Products",         value: "Use `/buy` to browse and purchase available products", inline: false },
-        { name: "💰  Check Balance",             value: "Use `/balance` to view your current account balance", inline: false },
-        { name: "📖  All Commands",              value: "Use `/help` to see the complete list of available commands", inline: false },
-        { name: "🪙  Accepted Cryptocurrencies", value: "₿ Bitcoin • Ł Litecoin • ₮ USDT (TRC20) • 🔺 TRON • 🟡 BNB", inline: false }
+        "**🇷🇺 Используй команды ниже для покупки:**\n" +
+        "💳 `/pay` — пополнить баланс крипто\n" +
+        "🛒 `/buy` — купить товар\n" +
+        "💰 `/balance` — посмотреть баланс\n\n" +
+        "**🇬🇧 Use the commands below to purchase:**\n" +
+        "💳 `/pay` — top up balance with crypto\n" +
+        "🛒 `/buy` — purchase a product\n" +
+        "💰 `/balance` — check your balance\n\n" +
+        "🪙 **Принимаем / Accepted:** Bitcoin • Litecoin • USDT • TRON • BNB"
       )
       .setColor(BRAND_COLOR)
       .setFooter({ text: FOOTER_TEXT })
       .setTimestamp();
 
     const actionRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("btn_pay").setLabel("💳 Top Up Balance").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId("btn_buy").setLabel("🛒 Shop").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("btn_balance").setLabel("💰 Balance").setStyle(ButtonStyle.Secondary)
+      new ButtonBuilder().setCustomId("btn_pay").setLabel("💳 Пополнить / Top Up").setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId("btn_buy").setLabel("🛒 Купить / Shop").setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId("btn_balance").setLabel("💰 Баланс / Balance").setStyle(ButtonStyle.Secondary)
     );
 
     await channel.send({ embeds: [welcomeEmbed], components: [actionRow] });
@@ -1656,24 +1656,31 @@ function buildBrainrotTimeOfferModal(offerId) {
 /**
  * Embed + buttons sent to all Receiver users when a buyer submits a brainrot offer
  */
-function buildReceiverOfferEmbed(buyerUser, brainrotInfo, contactInfo, offerId) {
+function buildReceiverOfferEmbed(buyerUser, brainrotInfo, contactInfo, offerId, wantedProduct, channelLink) {
   const isServer = isPrivateServer(contactInfo);
 
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle("🐸  Новое предложение брейнротами!")
     .setDescription(
       `Покупатель <@${buyerUser.id}> предлагает брейнротов в обмен на время доступа.`
     )
     .addFields(
-      { name: "🎮 Брейнрот",          value: `\`${brainrotInfo}\``,          inline: false },
+      { name: "🛒 Хочет купить",          value: wantedProduct || "Не указано",        inline: false },
+      { name: "🎮 Брейнрот",              value: `\`${brainrotInfo}\``,                 inline: false },
       { name: isServer ? "🔗 Приватный сервер" : "👤 Ник в Роблоксе",
-        value: isServer ? contactInfo : `\`${contactInfo}\``,                 inline: false },
-      { name: "🆔 Offer ID",          value: `\`${offerId}\``,               inline: true },
-      { name: "👤 Покупатель",        value: `<@${buyerUser.id}>`,           inline: true }
+        value: isServer ? contactInfo : `\`${contactInfo}\``,                            inline: false },
+      { name: "🆔 Offer ID",              value: `\`${offerId}\``,                      inline: true },
+      { name: "👤 Покупатель",            value: `<@${buyerUser.id}>`,                  inline: true }
     )
     .setColor(BRAINROT_COLOR)
     .setFooter({ text: `Нажмите «Принять», чтобы предложить время • ${FOOTER_TEXT}` })
     .setTimestamp();
+
+  if (channelLink) {
+    embed.addFields({ name: "📎 Тикет покупателя", value: channelLink, inline: false });
+  }
+
+  return embed;
 }
 
 /**
@@ -3834,81 +3841,98 @@ client.on("interactionCreate", async (interaction) => {
     if (interaction.customId === "select_payment_method") {
       const method = interaction.values[0];
 
-      if (method === "funpay") {
-        const backButton = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId("btn_buy")
-            .setLabel("◀️ Back to Payment Methods")
-            .setStyle(ButtonStyle.Secondary)
-        );
-        return interaction.update({
-          embeds: [buildFunPayEmbed()],
-          components: [backButton]
-        });
-      }
-
-      // ── NEW: Brainrot payment method ──
-      if (method === "brainrot") {
-        // Show the modal immediately (cannot call update AND showModal)
-        return interaction.showModal(buildBrainrotOfferModal());
-      }
-
-      if (method === "balance") {
-        // Defer update FIRST to avoid "Unknown interaction" (3-sec timeout)
-        await interaction.deferUpdate();
-
-        if (interaction.guildId === RESTRICTED_GUILD_ID) {
-          const product  = PRODUCTS["notifier"];
-          const currentCount = await getNotifierCurrentCount();
-          const available    = MAX_NOTIFIER_STOCK - currentCount;
-          const stockStr     = available <= 0
-            ? "🛑 **SOLD OUT** — No slots available"
-            : `🟢 **${available}/${MAX_NOTIFIER_STOCK}** slots available`;
-
-          const tierInfo = product.tiers.map(t =>
-            `**${t.days} day${t.days > 1 ? "s" : ""}** — **$${t.price}**  🔔 Grants **${ROLE_NOTIFIER_ACCESS}** role`
+      try {
+        if (method === "funpay") {
+          await interaction.deferUpdate();
+          const backButton = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId("btn_buy")
+              .setLabel("◀️ Back to Payment Methods")
+              .setStyle(ButtonStyle.Secondary)
           );
-
-          const existingSub = await getSubscription(interaction.user.id);
-          const subNote = existingSub
-            ? `\n\n> ℹ️ You currently have **${formatDuration(new Date(existingSub.expires_at) - new Date())}** remaining. Purchasing again will **extend** your access.`
-            : "";
-
-          const embed = new EmbedBuilder()
-            .setTitle(`${product.emoji}  ${product.name}  •  ${stockStr}`)
-            .setDescription(
-              `${product.description}\n\n` +
-              `**💰 Pricing:**\n${tierInfo.join("\n")}` +
-              subNote
-            )
-            .setColor(available <= 0 ? ERROR_COLOR : ACCESS_COLOR)
-            .setFooter({ text: "Select a duration below to purchase • " + FOOTER_TEXT })
-            .setTimestamp();
-
-          const row = buildTierButtons("notifier");
-
-          if (available <= 0) {
-            const disabledRow = new ActionRowBuilder().addComponents(
-              product.tiers.map(t =>
-                new ButtonBuilder()
-                  .setCustomId(`buy_notifier_${t.days}`)
-                  .setLabel(`${t.days} Day${t.days > 1 ? "s" : ""} - $${t.price}`)
-                  .setStyle(ButtonStyle.Danger)
-                  .setEmoji("🛑")
-                  .setDisabled(true)
-              )
-            );
-            return interaction.editReply({ embeds: [embed], components: [disabledRow] });
-          }
-
-          return interaction.editReply({ embeds: [embed], components: row ? [row] : [] });
+          return await interaction.editReply({
+            embeds: [buildFunPayEmbed()],
+            components: [backButton]
+          });
         }
 
-        const embed = await buildShopEmbed(interaction.guildId);
-        return interaction.editReply({
-          embeds: [embed],
-          components: [buildProductMenu(interaction.guildId)]
-        });
+        // ── NEW: Brainrot payment method ──
+        if (method === "brainrot") {
+          // Show the modal immediately (cannot call update AND showModal)
+          return interaction.showModal(buildBrainrotOfferModal());
+        }
+
+        if (method === "balance") {
+          // Defer update FIRST to avoid "Unknown interaction" (3-sec timeout)
+          await interaction.deferUpdate();
+
+          if (interaction.guildId === RESTRICTED_GUILD_ID) {
+            const product  = PRODUCTS["notifier"];
+            const currentCount = await getNotifierCurrentCount();
+            const available    = MAX_NOTIFIER_STOCK - currentCount;
+            const stockStr     = available <= 0
+              ? "🛑 **SOLD OUT** — No slots available"
+              : `🟢 **${available}/${MAX_NOTIFIER_STOCK}** slots available`;
+
+            const tierInfo = product.tiers.map(t =>
+              `**${t.days} day${t.days > 1 ? "s" : ""}** — **$${t.price}**  🔔 Grants **${ROLE_NOTIFIER_ACCESS}** role`
+            );
+
+            const existingSub = await getSubscription(interaction.user.id);
+            const subNote = existingSub
+              ? `\n\n> ℹ️ You currently have **${formatDuration(new Date(existingSub.expires_at) - new Date())}** remaining. Purchasing again will **extend** your access.`
+              : "";
+
+            const embed = new EmbedBuilder()
+              .setTitle(`${product.emoji}  ${product.name}  •  ${stockStr}`)
+              .setDescription(
+                `${product.description}\n\n` +
+                `**💰 Pricing:**\n${tierInfo.join("\n")}` +
+                subNote
+              )
+              .setColor(available <= 0 ? ERROR_COLOR : ACCESS_COLOR)
+              .setFooter({ text: "Select a duration below to purchase • " + FOOTER_TEXT })
+              .setTimestamp();
+
+            const row = buildTierButtons("notifier");
+
+            if (available <= 0) {
+              const disabledRow = new ActionRowBuilder().addComponents(
+                product.tiers.map(t =>
+                  new ButtonBuilder()
+                    .setCustomId(`buy_notifier_${t.days}`)
+                    .setLabel(`${t.days} Day${t.days > 1 ? "s" : ""} - $${t.price}`)
+                    .setStyle(ButtonStyle.Danger)
+                    .setEmoji("🛑")
+                    .setDisabled(true)
+                )
+              );
+              return await interaction.editReply({ embeds: [embed], components: [disabledRow] });
+            }
+
+            return await interaction.editReply({ embeds: [embed], components: row ? [row] : [] });
+          }
+
+          const embed = await buildShopEmbed(interaction.guildId);
+          return await interaction.editReply({
+            embeds: [embed],
+            components: [buildProductMenu(interaction.guildId)]
+          });
+        }
+      } catch (err) {
+        console.error("❌ select_payment_method error:", err.message);
+        try {
+          const errEmbed = new EmbedBuilder()
+            .setTitle("❌  Ошибка")
+            .setDescription("Что-то пошло не так. Попробуй ещё раз.")
+            .setColor(ERROR_COLOR)
+            .setFooter({ text: FOOTER_TEXT });
+          if (interaction.deferred || interaction.replied) {
+            await interaction.editReply({ embeds: [errEmbed], components: [] }).catch(() => {});
+          } else {
+            await interaction.reply({ embeds: [errEmbed], ephemeral: true }).catch(() => {});
+          }
+        } catch { /* ignore */ }
       }
     }
 
@@ -4143,14 +4167,27 @@ client.on("interactionCreate", async (interaction) => {
       }
 
       const offerId = generateOfferId();
+
+      // Determine what product the buyer wants based on their guild
+      let wantedProduct = "любой товар";
+      if (interaction.guildId === RESTRICTED_GUILD_ID)  wantedProduct = "🔔 Notifier";
+      else if (interaction.guildId === SECOND_GUILD_ID) wantedProduct = "🤖 Auto Joiner";
+
+      const channelLink = interaction.guildId
+        ? `https://discord.com/channels/${interaction.guildId}/${interaction.channelId}`
+        : null;
+
       brainrotOffers.set(offerId, {
-        buyerId:      interaction.user.id,
+        buyerId:       interaction.user.id,
         brainrotInfo,
         contactInfo,
-        guildId:      interaction.guildId,
-        receiverId:   null,
-        offeredMs:    null,
-        offeredLabel: null
+        guildId:       interaction.guildId,
+        channelId:     interaction.channelId,
+        channelLink,
+        wantedProduct,
+        receiverId:    null,
+        offeredMs:     null,
+        offeredLabel:  null
       });
 
       // Auto-expire offer after 1 hour to avoid stale data
@@ -4175,7 +4212,7 @@ client.on("interactionCreate", async (interaction) => {
           .setEmoji("🚫")
       );
 
-      const offerEmbed = buildReceiverOfferEmbed(interaction.user, brainrotInfo, contactInfo, offerId);
+      const offerEmbed = buildReceiverOfferEmbed(interaction.user, brainrotInfo, contactInfo, offerId, wantedProduct, channelLink);
 
       // Send to all Receiver role users
       const receivers = await getReceiverUsers();
