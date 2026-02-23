@@ -61,10 +61,7 @@ const brainrotOffers = new Map();
 
 // ===== SUPABASE =====
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-if (!DISCORD_TOKEN) {
-  console.error("❌ DISCORD_TOKEN is not set! Bot cannot start.");
-  process.exit(1);
-}
+
 // ===== DISCORD BOT =====
 const client = new Client({
   intents: [
@@ -4838,4 +4835,26 @@ app.post("/webhook", async (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`🌐 Webhook server on port ${PORT}`));
-client.login(DISCORD_TOKEN);
+
+// ===== DISCORD LOGIN WITH ERROR CATCHING =====
+console.log("🔍 ENV CHECK:");
+console.log("  DISCORD_TOKEN:", DISCORD_TOKEN ? `✅ SET (${DISCORD_TOKEN.length} chars)` : "❌ MISSING");
+console.log("  CLIENT_ID:", CLIENT_ID ? "✅ SET" : "❌ MISSING");
+console.log("  SUPABASE_URL:", SUPABASE_URL ? "✅ SET" : "❌ MISSING");
+console.log("  SUPABASE_KEY:", SUPABASE_KEY ? "✅ SET" : "❌ MISSING");
+console.log("  NOWPAYMENTS_API_KEY:", NOWPAYMENTS_API_KEY ? "✅ SET" : "❌ MISSING");
+console.log("  IPN_SECRET:", IPN_SECRET ? "✅ SET" : "❌ MISSING");
+console.log("  WEBHOOK_URL:", WEBHOOK_URL || "❌ MISSING");
+
+if (!DISCORD_TOKEN) {
+  console.error("❌ DISCORD_TOKEN is not set — cannot login. Exiting.");
+  process.exit(1);
+}
+
+client.login(DISCORD_TOKEN)
+  .then(() => console.log("✅ client.login() succeeded"))
+  .catch(err => {
+    console.error("❌ client.login() FAILED:", err.message);
+    console.error("❌ Full error:", JSON.stringify(err, null, 2));
+    process.exit(1);
+  });
