@@ -389,12 +389,28 @@ let _notifierCountCache = null;
 let _notifierCountCachedAt = 0;
 const NOTIFIER_COUNT_TTL_MS = 30_000; // 30 seconds
 
-async function getNotifierCurrentCount(forceRefresh = false) {
-  const now = Date.now();
-  if (!forceRefresh && _notifierCountCache !== null && (now - _notifierCountCachedAt) < NOTIFIER_COUNT_TTL_MS) {
+// Fast version: uses only in-memory member cache (no API call) — safe for interactions
+function getNotifierCurrentCountFast() {
+  if (_notifierCountCache !== null && (Date.now() - _notifierCountCachedAt) < NOTIFIER_COUNT_TTL_MS) {
     return _notifierCountCache;
   }
+  const seen = new Set();
+  for (const [, guild] of client.guilds.cache) {
+    const role = guild.roles.cache.find(
+      r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_NOTIFIER_ACCESS)
+    );
+    if (!role) continue;
+    for (const [, member] of guild.members.cache) {
+      if (member.roles.cache.has(role.id)) seen.add(member.id);
+    }
+  }
+  _notifierCountCache = seen.size;
+  _notifierCountCachedAt = Date.now();
+  return _notifierCountCache;
+}
 
+// Slow version: force-fetches all members from Discord API — only for background tasks
+async function getNotifierCurrentCount() {
   const seen = new Set();
   for (const [, guild] of client.guilds.cache) {
     try {
@@ -405,14 +421,11 @@ async function getNotifierCurrentCount(forceRefresh = false) {
     );
     if (!role) continue;
     for (const [, member] of guild.members.cache) {
-      if (member.roles.cache.has(role.id)) {
-        seen.add(member.id);
-      }
+      if (member.roles.cache.has(role.id)) seen.add(member.id);
     }
   }
-
   _notifierCountCache = seen.size;
-  _notifierCountCachedAt = now;
+  _notifierCountCachedAt = Date.now();
   return _notifierCountCache;
 }
 
@@ -1349,7 +1362,7 @@ async function buildShopEmbed(guildId) {
 
   for (const [, product] of Object.entries(products)) {
     if (product.isAccess) {
-      const currentCount = await getNotifierCurrentCount();
+      const currentCount = getNotifierCurrentCountFast();
       const available    = MAX_NOTIFIER_STOCK - currentCount;
       const stockStr     = available <= 0 ? "🛑 **SOLD OUT**" : `🟢 **${available}/${MAX_NOTIFIER_STOCK}** slots free`;
       const priceInfo    = product.pricePerHour
@@ -3596,7 +3609,7 @@ client.on("interactionCreate", async (interaction) => {
 
         // ── NOTIFIER: role-based purchase ──
         if (product.isAccess) {
-          const currentCount = await getNotifierCurrentCount();
+          const currentCount = getNotifierCurrentCountFast();
           const available    = MAX_NOTIFIER_STOCK - currentCount;
 
           if (available <= 0) {
@@ -3919,7 +3932,7 @@ client.on("interactionCreate", async (interaction) => {
 
           if (interaction.guildId === RESTRICTED_GUILD_ID) {
             const product  = PRODUCTS["notifier"];
-            const currentCount = await getNotifierCurrentCount();
+            const currentCount = getNotifierCurrentCountFast();
             const available    = MAX_NOTIFIER_STOCK - currentCount;
             const stockStr     = available <= 0
               ? "🛑 **SOLD OUT** — No slots available"
@@ -4008,7 +4021,7 @@ client.on("interactionCreate", async (interaction) => {
       const product = PRODUCTS[productId];
 
       if (product.isAccess) {
-        const currentCount = await getNotifierCurrentCount();
+        const currentCount = getNotifierCurrentCountFast();
         const available    = MAX_NOTIFIER_STOCK - currentCount;
         const stockStr     = available <= 0
           ? "🛑 **SOLD OUT** — No slots available"
@@ -4133,7 +4146,7 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      const currentCount = await getNotifierCurrentCount();
+      const currentCount = getNotifierCurrentCountFast();
       const available    = MAX_NOTIFIER_STOCK - currentCount;
 
       if (available <= 0) {
