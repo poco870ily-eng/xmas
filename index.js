@@ -394,14 +394,16 @@ function getNotifierCurrentCountFast() {
   if (_notifierCountCache !== null && (Date.now() - _notifierCountCachedAt) < NOTIFIER_COUNT_TTL_MS) {
     return _notifierCountCache;
   }
-  const seen = new Set();
-  for (const [, guild] of client.guilds.cache) {
+  const seen  = new Set();
+  const guild = client.guilds.cache.get(RESTRICTED_GUILD_ID);
+  if (guild) {
     const role = guild.roles.cache.find(
       r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_NOTIFIER_ACCESS)
     );
-    if (!role) continue;
-    for (const [, member] of guild.members.cache) {
-      if (member.roles.cache.has(role.id)) seen.add(member.id);
+    if (role) {
+      for (const [, member] of guild.members.cache) {
+        if (member.roles.cache.has(role.id)) seen.add(member.id);
+      }
     }
   }
   _notifierCountCache = seen.size;
@@ -411,17 +413,17 @@ function getNotifierCurrentCountFast() {
 
 // Slow version: force-fetches all members from Discord API — only for background tasks
 async function getNotifierCurrentCount() {
-  const seen = new Set();
-  for (const [, guild] of client.guilds.cache) {
-    try {
-      await guild.members.fetch({ force: true });
-    } catch { /* ignore */ }
+  const seen  = new Set();
+  const guild = client.guilds.cache.get(RESTRICTED_GUILD_ID);
+  if (guild) {
+    try { await guild.members.fetch({ force: true }); } catch { /* ignore */ }
     const role = guild.roles.cache.find(
       r => normalizeRoleName(r.name) === normalizeRoleName(ROLE_NOTIFIER_ACCESS)
     );
-    if (!role) continue;
-    for (const [, member] of guild.members.cache) {
-      if (member.roles.cache.has(role.id)) seen.add(member.id);
+    if (role) {
+      for (const [, member] of guild.members.cache) {
+        if (member.roles.cache.has(role.id)) seen.add(member.id);
+      }
     }
   }
   _notifierCountCache = seen.size;
@@ -446,14 +448,16 @@ async function updateStockChannel() {
     const available    = MAX_NOTIFIER_STOCK - currentCount;
     const isFull       = available <= 0;
 
-    const newName = isFull ? `🛑—stock-info` : `🟢—stock-info`;
+    const newName = isFull
+      ? `🔴・${MAX_NOTIFIER_STOCK}/${MAX_NOTIFIER_STOCK}-slots`
+      : `🟢・${Math.max(0, available)}/${MAX_NOTIFIER_STOCK}-slots`;
 
     if (channel.name !== newName) {
       await channel.setName(newName);
-      console.log(`📊 Stock channel updated → "${newName}" (${currentCount}/${MAX_NOTIFIER_STOCK})`);
+      console.log(`📊 Stock channel → ${newName}`);
     }
   } catch (e) {
-    console.error("❌ Could not update stock channel:", e.message);
+    console.error('❌ Could not update stock channel:', e.message);
   }
 }
 
