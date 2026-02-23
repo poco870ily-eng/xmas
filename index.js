@@ -1504,14 +1504,8 @@ const STATUS_CONFIG = {
     color: SUCCESS_COLOR, icon: "✅", title: "Payment Complete!",
     desc: "> Your balance has been successfully topped up. Enjoy!"
   },
-  failed: {
-    color: ERROR_COLOR, icon: "❌", title: "Payment Failed",
-    desc: "> Your payment could not be processed. Please try again with `/pay`."
-  },
-  expired: {
-    color: NEUTRAL_COLOR, icon: "💀", title: "Payment Expired",
-    desc: "> This invoice has expired. Please create a new payment with `/pay`."
-  }
+  failed:  null,
+  expired: null
 };
 
 // ===== UI BUILDERS =====
@@ -5000,7 +4994,7 @@ app.post("/webhook", async (req, res) => {
         }
       }
 
-    } else if (["confirming", "confirmed", "failed", "expired"].includes(status)) {
+    } else if (["confirming", "confirmed"].includes(status)) {
       const embed = new EmbedBuilder()
         .setTitle(`${cfg.icon}  ${cfg.title}`)
         .setDescription(cfg.desc)
@@ -5008,12 +5002,10 @@ app.post("/webhook", async (req, res) => {
         .setFooter({ text: `Payment ID: ${payment_id} • ${FOOTER_TEXT}` })
         .setTimestamp();
 
-      if (["confirming", "confirmed"].includes(status)) {
-        embed.addFields(
-          { name: "💵  Amount",   value: `\`${amount} USD\``,   inline: true },
-          { name: "🪙  Currency", value: `\`${pay_currency}\``, inline: true }
-        );
-      }
+      embed.addFields(
+        { name: "💵  Amount",   value: `\`${amount} USD\``,   inline: true },
+        { name: "🪙  Currency", value: `\`${pay_currency}\``, inline: true }
+      );
 
       if (msgInfo) {
         try {
