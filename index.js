@@ -61,7 +61,10 @@ const brainrotOffers = new Map();
 
 // ===== SUPABASE =====
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
+if (!DISCORD_TOKEN) {
+  console.error("❌ DISCORD_TOKEN is not set! Bot cannot start.");
+  process.exit(1);
+}
 // ===== DISCORD BOT =====
 const client = new Client({
   intents: [
