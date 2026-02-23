@@ -470,9 +470,17 @@ client.on("channelCreate", async (channel) => {
 async function isAllowedChannel(interaction) {
   if (!interaction.guildId) return true;
   if (!RESTRICTED_GUILD_IDS.has(interaction.guildId)) return true;
+  // Buttons, select menus, and modal submits are always allowed —
+  // they can only appear after the user was already shown the UI via
+  // an allowed slash-command interaction (e.g. inside a ticket).
+  if (
+    interaction.isButton() ||
+    interaction.isStringSelectMenu() ||
+    interaction.isModalSubmit()
+  ) return true;
   const channelName = interaction.channel?.name?.toLowerCase() ?? "";
   if (channelName.includes("ticket")) return true;
-  // Staff can use commands anywhere
+  // Staff can use slash commands anywhere
   const tier = await getAccessTier(interaction.user.id);
   return tier !== null;
 }
@@ -1158,16 +1166,13 @@ const PRODUCTS = {
     ]
   },
   notifier: {
-    id:          "notifier",
-    name:        "Notifier",
-    emoji:       "🔔",
-    description: "Get access to real-time alerts channel",
-    isAccess:    true,
-    tiers: [
-      { days: 3,  price: 20 },
-      { days: 7,  price: 50 },
-      { days: 14, price: 80 }
-    ]
+    id:           "notifier",
+    name:         "Notifier",
+    emoji:        "🔔",
+    description:  "Get access to real-time alerts channel",
+    isAccess:     true,
+    pricePerHour: 10,
+    tiers: []  // hourly — users enter custom hours via modal
   }
 };
 
@@ -1327,12 +1332,14 @@ async function buildShopEmbed(guildId) {
       const currentCount = await getNotifierCurrentCount();
       const available    = MAX_NOTIFIER_STOCK - currentCount;
       const stockStr     = available <= 0 ? "🛑 **SOLD OUT**" : `🟢 **${available}/${MAX_NOTIFIER_STOCK}** slots free`;
-      const tierInfo = product.tiers.map(t =>
-        `**${t.days} day${t.days > 1 ? "s" : ""}** — **$${t.price}**  🔔 Role access`
-      );
+      const priceInfo    = product.pricePerHour
+        ? `**$${product.pricePerHour} / hour** — choose any number of hours`
+        : product.tiers.map(t =>
+            `**${t.days} day${t.days > 1 ? "s" : ""}** — **$${t.price}**  🔔 Role access`
+          ).join("\n");
       embed.addFields({
         name:   `${product.emoji}  ${product.name}  •  ${stockStr}`,
-        value:  `${product.description}\n${tierInfo.join("\n")}`,
+        value:  `${product.description}\n${priceInfo}\n🔔 Grants **${ROLE_NOTIFIER_ACCESS}** role`,
         inline: false
       });
     } else {
@@ -1720,6 +1727,25 @@ function buildBuyerTimeOfferEmbed(receiverUser, offeredLabel, offerId) {
     .setColor(BRAINROT_COLOR)
     .setFooter({ text: `Accept or decline the offer • ${FOOTER_TEXT}` })
     .setTimestamp();
+}
+
+// ===== NOTIFIER HOURS MODAL =====
+function buildNotifierHoursModal() {
+  const modal = new ModalBuilder()
+    .setCustomId("modal_notifier_hours")
+    .setTitle("🔔 Buy Notifier Access");
+
+  const input = new TextInputBuilder()
+    .setCustomId("notifier_hours_input")
+    .setLabel("How many hours? ($10 per hour)")
+    .setStyle(TextInputStyle.Short)
+    .setPlaceholder("e.g. 3  (= $30 total)")
+    .setRequired(true)
+    .setMinLength(1)
+    .setMaxLength(5);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(input));
+  return modal;
 }
 
 // ===== PENDING PAYMENTS =====
@@ -2787,6 +2813,11 @@ client.on("interactionCreate", async (interaction) => {
         components: [buildPaymentMethodMenu()],
         ephemeral: true
       });
+    }
+
+    // ── Notifier: open hours input modal ──
+    if (interaction.customId === "btn_notifier_hours") {
+      return interaction.showModal(buildNotifierHoursModal());
     }
 
     // ── Brainrot: Receiver clicks Accept ──
@@ -3874,10 +3905,6 @@ client.on("interactionCreate", async (interaction) => {
               ? "🛑 **SOLD OUT** — No slots available"
               : `🟢 **${available}/${MAX_NOTIFIER_STOCK}** slots available`;
 
-            const tierInfo = product.tiers.map(t =>
-              `**${t.days} day${t.days > 1 ? "s" : ""}** — **$${t.price}**  🔔 Grants **${ROLE_NOTIFIER_ACCESS}** role`
-            );
-
             const existingSub = await getSubscription(interaction.user.id);
             const subNote = existingSub
               ? `\n\n> ℹ️ You currently have **${formatDuration(new Date(existingSub.expires_at) - new Date())}** remaining. Purchasing again will **extend** your access.`
@@ -3887,30 +3914,35 @@ client.on("interactionCreate", async (interaction) => {
               .setTitle(`${product.emoji}  ${product.name}  •  ${stockStr}`)
               .setDescription(
                 `${product.description}\n\n` +
-                `**💰 Pricing:**\n${tierInfo.join("\n")}` +
+                `**💰 Pricing:**\n> 🕐 **$${product.pricePerHour} per hour** — choose any number of hours\n` +
+                `> Example: 6 hours = $${product.pricePerHour * 6} | 24 hours = $${product.pricePerHour * 24}\n\n` +
+                `🔔 Grants the **${ROLE_NOTIFIER_ACCESS}** role for the chosen duration.` +
                 subNote
               )
               .setColor(available <= 0 ? ERROR_COLOR : ACCESS_COLOR)
-              .setFooter({ text: "Select a duration below to purchase • " + FOOTER_TEXT })
+              .setFooter({ text: "Click the button below to choose your hours • " + FOOTER_TEXT })
               .setTimestamp();
-
-            const row = buildTierButtons("notifier");
 
             if (available <= 0) {
               const disabledRow = new ActionRowBuilder().addComponents(
-                product.tiers.map(t =>
-                  new ButtonBuilder()
-                    .setCustomId(`buy_notifier_${t.days}`)
-                    .setLabel(`${t.days} Day${t.days > 1 ? "s" : ""} - $${t.price}`)
-                    .setStyle(ButtonStyle.Danger)
-                    .setEmoji("🛑")
-                    .setDisabled(true)
-                )
+                new ButtonBuilder()
+                  .setCustomId("btn_notifier_hours")
+                  .setLabel("🛑 SOLD OUT")
+                  .setStyle(ButtonStyle.Danger)
+                  .setDisabled(true)
               );
               return await interaction.editReply({ embeds: [embed], components: [disabledRow] });
             }
 
-            return await interaction.editReply({ embeds: [embed], components: row ? [row] : [] });
+            const buyRow = new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId("btn_notifier_hours")
+                .setLabel("🕐 Choose Hours & Buy")
+                .setStyle(ButtonStyle.Success)
+                .setEmoji("🔔")
+            );
+
+            return await interaction.editReply({ embeds: [embed], components: [buyRow] });
           }
 
           const embed = await buildShopEmbed(interaction.guildId);
@@ -3962,10 +3994,6 @@ client.on("interactionCreate", async (interaction) => {
           ? "🛑 **SOLD OUT** — No slots available"
           : `🟢 **${available}/${MAX_NOTIFIER_STOCK}** slots available`;
 
-        const tierInfo = product.tiers.map(t =>
-          `**${t.days} day${t.days > 1 ? "s" : ""}** — **$${t.price}**  🔔 Grants **${ROLE_NOTIFIER_ACCESS}** role`
-        );
-
         const existingSub = await getSubscription(interaction.user.id);
         const subNote = existingSub
           ? `\n\n> ℹ️ You currently have **${formatDuration(new Date(existingSub.expires_at) - new Date())}** remaining. Purchasing again will **extend** your access.`
@@ -3975,29 +4003,34 @@ client.on("interactionCreate", async (interaction) => {
           .setTitle(`${product.emoji}  ${product.name}  •  ${stockStr}`)
           .setDescription(
             `${product.description}\n\n` +
-            `**💰 Pricing:**\n${tierInfo.join("\n")}` +
+            `**💰 Pricing:**\n> 🕐 **$${product.pricePerHour} per hour** — choose any number of hours\n` +
+            `> Example: 6 hours = $${product.pricePerHour * 6} | 24 hours = $${product.pricePerHour * 24}\n\n` +
+            `🔔 Grants the **${ROLE_NOTIFIER_ACCESS}** role for the chosen duration.` +
             subNote
           )
           .setColor(available <= 0 ? ERROR_COLOR : ACCESS_COLOR)
-          .setFooter({ text: "Select a duration below to purchase • " + FOOTER_TEXT })
+          .setFooter({ text: "Click the button below to choose your hours • " + FOOTER_TEXT })
           .setTimestamp();
 
         if (available <= 0) {
           const disabledRow = new ActionRowBuilder().addComponents(
-            product.tiers.map(t =>
-              new ButtonBuilder()
-                .setCustomId(`buy_notifier_${t.days}`)
-                .setLabel(`${t.days} Day${t.days > 1 ? "s" : ""} - $${t.price}`)
-                .setStyle(ButtonStyle.Danger)
-                .setEmoji("🛑")
-                .setDisabled(true)
-            )
+            new ButtonBuilder()
+              .setCustomId("btn_notifier_hours")
+              .setLabel("🛑 SOLD OUT")
+              .setStyle(ButtonStyle.Danger)
+              .setDisabled(true)
           );
           return interaction.update({ embeds: [embed], components: [disabledRow] });
         }
 
-        const row = buildTierButtons(productId);
-        return interaction.update({ embeds: [embed], components: row ? [row] : [] });
+        const buyRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("btn_notifier_hours")
+            .setLabel("🕐 Choose Hours & Buy")
+            .setStyle(ButtonStyle.Success)
+            .setEmoji("🔔")
+        );
+        return interaction.update({ embeds: [embed], components: [buyRow] });
       }
 
       const tierInfo = await Promise.all(
@@ -4040,6 +4073,146 @@ client.on("interactionCreate", async (interaction) => {
 
   // ──────────── MODAL SUBMITS ────────────
   if (interaction.isModalSubmit()) {
+
+    // ===== MODAL: Notifier — custom hours input =====
+    if (interaction.customId === "modal_notifier_hours") {
+      await interaction.deferReply({ flags: 64 });
+
+      const rawInput = interaction.fields.getTextInputValue("notifier_hours_input").trim();
+      const hours    = parseInt(rawInput);
+
+      if (isNaN(hours) || hours < 1) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Invalid Input")
+              .setDescription("Please enter a whole number of hours (minimum **1 hour**).")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const product  = PRODUCTS["notifier"];
+      const price    = hours * product.pricePerHour;
+      const balance  = await getBalance(interaction.user.id);
+
+      if (balance < price) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("💰  Insufficient Balance")
+              .setDescription(
+                `**${hours} hour${hours > 1 ? "s" : ""}** costs **$${price}** but your balance is **$${balance.toFixed(2)}**.\n` +
+                `Missing: **$${(price - balance).toFixed(2)}**\n\n` +
+                `Use \`/pay\` to top up your balance.`
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const currentCount = await getNotifierCurrentCount();
+      const available    = MAX_NOTIFIER_STOCK - currentCount;
+
+      if (available <= 0) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🛑  No Slots Available")
+              .setDescription(
+                `**Notifier** is currently full! (**${currentCount}/${MAX_NOTIFIER_STOCK}** slots occupied)\n\n` +
+                `Please check back later when a slot opens up.`
+              )
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      }
+
+      const deducted = await deductBalance(interaction.user.id, price);
+      if (!deducted) {
+        return interaction.editReply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("❌  Payment Failed")
+              .setDescription("Could not process payment. Please try again.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ]
+        });
+      }
+
+      const ms = hours * 60 * 60 * 1000;
+      await addSubscriptionMs(interaction.user.id, ms);
+      await giveNotifierRole(interaction.user.id, interaction.guild);
+
+      const newBalance = await getBalance(interaction.user.id);
+      const subData    = await supabase
+        .from("subscriptions")
+        .select("expires_at")
+        .eq("user_id", interaction.user.id.toString())
+        .single();
+
+      const expiresAt  = subData.data ? new Date(subData.data.expires_at) : null;
+      const unixExpiry = expiresAt ? Math.floor(expiresAt.getTime() / 1000) : null;
+      const channelName = getNotifierChannelName(interaction.guildId);
+
+      await interaction.editReply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("✅  Notifier Access Granted!")
+            .setDescription(
+              `You now have access to the **${channelName}** channel!\n` +
+              `The **${ROLE_NOTIFIER_ACCESS}** role has been given to you.`
+            )
+            .addFields(
+              { name: "🕐 Duration",    value: `\`${hours} hour${hours > 1 ? "s" : ""}\``,            inline: true },
+              { name: "💵 Price",       value: `\`$${price}\``,                                        inline: true },
+              { name: "💰 New Balance", value: `\`$${newBalance.toFixed(2)}\``,                        inline: true },
+              {
+                name:  "⏰ Access Until",
+                value: unixExpiry ? `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)` : "Unknown",
+                inline: false
+              }
+            )
+            .setColor(ACCESS_COLOR)
+            .setFooter({ text: "Your role has been assigned • " + FOOTER_TEXT })
+            .setTimestamp()
+        ]
+      });
+
+      try {
+        await interaction.user.send({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("🔔  Notifier Access Confirmation")
+              .setDescription(
+                `You've purchased **${product.name}** — **${hours} hour${hours > 1 ? "s" : ""}** access to **${channelName}**!\n\n` +
+                `Your **${ROLE_NOTIFIER_ACCESS}** role is now active.`
+              )
+              .addFields(
+                { name: "🕐 Duration", value: `\`${hours} hour${hours > 1 ? "s" : ""}\``, inline: true },
+                { name: "💵 Price",    value: `\`$${price}\``,                              inline: true },
+                {
+                  name:  "⏰ Expires",
+                  value: unixExpiry ? `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)` : "Unknown",
+                  inline: false
+                }
+              )
+              .setColor(ACCESS_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+              .setTimestamp()
+          ]
+        });
+      } catch {
+        console.log(`⚠️ Could not DM ${interaction.user.tag} about Notifier purchase`);
+      }
+
+      return;
+    }
 
     if (interaction.customId === "modal_custom_amount") {
       const userId  = interaction.user.id;
