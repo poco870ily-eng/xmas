@@ -384,7 +384,17 @@ client.on("guildCreate", (guild) => {
 });
 
 // ===== STOCK HELPERS =====
-async function getNotifierCurrentCount() {
+// Cache notifier count to avoid heavy guild.members.fetch on every button click
+let _notifierCountCache = null;
+let _notifierCountCachedAt = 0;
+const NOTIFIER_COUNT_TTL_MS = 30_000; // 30 seconds
+
+async function getNotifierCurrentCount(forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && _notifierCountCache !== null && (now - _notifierCountCachedAt) < NOTIFIER_COUNT_TTL_MS) {
+    return _notifierCountCache;
+  }
+
   const seen = new Set();
   for (const [, guild] of client.guilds.cache) {
     try {
@@ -400,7 +410,15 @@ async function getNotifierCurrentCount() {
       }
     }
   }
-  return seen.size;
+
+  _notifierCountCache = seen.size;
+  _notifierCountCachedAt = now;
+  return _notifierCountCache;
+}
+
+function invalidateNotifierCountCache() {
+  _notifierCountCache = null;
+  _notifierCountCachedAt = 0;
 }
 
 async function updateStockChannel() {
@@ -651,6 +669,7 @@ async function giveNotifierRole(userId, guild) {
     const member = await guild.members.fetch({ user: userId, force: true });
     await member.roles.add(role.id);
     console.log(`✅ Gave "${ROLE_NOTIFIER_ACCESS}" role (${role.id}) to ${userId}`);
+    invalidateNotifierCountCache();
     await updateStockChannel();
     return true;
   } catch (e) {
@@ -675,6 +694,7 @@ async function removeNotifierRole(userId, guild) {
       await member.roles.remove(role.id);
       console.log(`✅ Removed "${ROLE_NOTIFIER_ACCESS}" role from ${userId}`);
     }
+    invalidateNotifierCountCache();
     await updateStockChannel();
     return true;
   } catch (e) {
