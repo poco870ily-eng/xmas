@@ -445,12 +445,9 @@ async function updateStockChannel() {
     }
 
     const currentCount = await getNotifierCurrentCount();
-    const available    = MAX_NOTIFIER_STOCK - currentCount;
-    const isFull       = available <= 0;
-
-    const newName = isFull
-      ? `🔴・${MAX_NOTIFIER_STOCK}/${MAX_NOTIFIER_STOCK}-slots`
-      : `🟢・${Math.max(0, available)}/${MAX_NOTIFIER_STOCK}-slots`;
+    const taken    = currentCount;
+    const emoji    = taken === 0 ? '🟢' : taken >= MAX_NOTIFIER_STOCK ? '🔴' : '🟡';
+    const newName  = `${emoji}・${taken}/${MAX_NOTIFIER_STOCK}`;
 
     if (channel.name !== newName) {
       await channel.setName(newName);
@@ -1368,7 +1365,9 @@ async function buildShopEmbed(guildId) {
     if (product.isAccess) {
       const currentCount = getNotifierCurrentCountFast();
       const available    = MAX_NOTIFIER_STOCK - currentCount;
-      const stockStr     = available <= 0 ? "🛑 **SOLD OUT**" : `🟢 **${available}/${MAX_NOTIFIER_STOCK}** slots free`;
+      const taken = currentCount;
+      const emoji = taken === 0 ? "🟢" : taken >= MAX_NOTIFIER_STOCK ? "🔴" : "🟡";
+      const stockStr = `${emoji} **${taken}/${MAX_NOTIFIER_STOCK}** slots taken` + (taken >= MAX_NOTIFIER_STOCK ? " — **SOLD OUT**" : "");
       const priceInfo    = product.pricePerHour
         ? `**$${product.pricePerHour} / hour** — choose any number of hours`
         : product.tiers.map(t =>
@@ -3932,9 +3931,11 @@ client.on("interactionCreate", async (interaction) => {
             const product  = PRODUCTS["notifier"];
             const currentCount = getNotifierCurrentCountFast();
             const available    = MAX_NOTIFIER_STOCK - currentCount;
-            const stockStr     = available <= 0
-              ? "🛑 **SOLD OUT** — No slots available"
-              : `🟢 **${available}/${MAX_NOTIFIER_STOCK}** slots available`;
+            const taken_s = currentCount;
+            const emoji_s = taken_s === 0 ? "🟢" : taken_s >= MAX_NOTIFIER_STOCK ? "🔴" : "🟡";
+            const stockStr = taken_s >= MAX_NOTIFIER_STOCK
+              ? `${emoji_s} **${taken_s}/${MAX_NOTIFIER_STOCK}** — **SOLD OUT**`
+              : `${emoji_s} **${taken_s}/${MAX_NOTIFIER_STOCK}** slots taken`;
 
             const existingSub = await getSubscription(interaction.user.id);
             const subNote = existingSub
@@ -4021,9 +4022,11 @@ client.on("interactionCreate", async (interaction) => {
       if (product.isAccess) {
         const currentCount = getNotifierCurrentCountFast();
         const available    = MAX_NOTIFIER_STOCK - currentCount;
-        const stockStr     = available <= 0
-          ? "🛑 **SOLD OUT** — No slots available"
-          : `🟢 **${available}/${MAX_NOTIFIER_STOCK}** slots available`;
+        const taken_s = currentCount;
+        const emoji_s = taken_s === 0 ? "🟢" : taken_s >= MAX_NOTIFIER_STOCK ? "🔴" : "🟡";
+        const stockStr = taken_s >= MAX_NOTIFIER_STOCK
+          ? `${emoji_s} **${taken_s}/${MAX_NOTIFIER_STOCK}** — **SOLD OUT**`
+          : `${emoji_s} **${taken_s}/${MAX_NOTIFIER_STOCK}** slots taken`;
 
         const existingSub = await getSubscription(interaction.user.id);
         const subNote = existingSub
