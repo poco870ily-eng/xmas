@@ -474,11 +474,14 @@ client.on("channelCreate", async (channel) => {
         "**🇷🇺 Используй команды ниже для покупки:**\n" +
         "💳 `/pay` — пополнить баланс крипто\n" +
         "🛒 `/buy` — купить товар\n" +
-        "💰 `/balance` — посмотреть баланс\n\n" +
+        "💰 `/balance` — посмотреть баланс\n" +
+        "🔥 **Сейчас действует скидка $10 на все товары!**\n\n" +
         "**🇬🇧 Use the commands below to purchase:**\n" +
         "💳 `/pay` — top up balance with crypto\n" +
         "🛒 `/buy` — purchase a product\n" +
-        "💰 `/balance` — check your balance\n\n" +
+        "💰 `/balance` — check your balance\n" +
+        "🔥 **LIMITED SALE — $10 OFF all products!**\n" +
+        "🧠 You can also pay with **Brainrots** using `/buy`!\n\n" +
         "🪙 **Принимаем / Accepted:** Bitcoin • Litecoin • USDT • TRON • BNB"
       )
       .setColor(BRAND_COLOR)
@@ -1194,9 +1197,9 @@ const PRODUCTS = {
     description: "Automatically join rich servers",
     isAccess:    false,
     tiers: [
-      { days: 1, price: 30, originalPrice: 60 },
-      { days: 2, price: 50, originalPrice: 80 },
-      { days: 3, price: 70, originalPrice: 100 }
+      { days: 1, price: 20, originalPrice: 30 },
+      { days: 2, price: 40, originalPrice: 50 },
+      { days: 3, price: 60, originalPrice: 70 }
     ]
   },
   notifier: {
