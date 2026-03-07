@@ -474,72 +474,45 @@ client.on("channelCreate", async (channel) => {
     if (guildId === SECOND_GUILD_ID) {
       const embed = new EmbedBuilder()
         .setTitle("🚀  Auto Joiner")
-        .setDescription(
-          "Top up your balance and buy Auto Joiner.\n" +
-          "💳 `/pay` · 💰 `/balance`"
-        )
+        .setDescription("Top up your balance and buy Auto Joiner.\n💳 `/pay` · 💰 `/balance`")
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT });
 
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("btn_buy")
-          .setLabel("🚀 BUY AUTO JOINER")
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId("btn_pay")
-          .setLabel("💳 Top Up")
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId("btn_balance")
-          .setLabel("💰 Balance")
-          .setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId("btn_buy").setLabel("🚀 BUY AUTO JOINER").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId("btn_pay").setLabel("💳 Top Up").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("btn_balance").setLabel("💰 Balance").setStyle(ButtonStyle.Secondary)
       );
-
       await channel.send({ embeds: [embed], components: [row] });
 
     // ── Notifier server ─────────────────────────────────────────────────────
     } else if (guildId === RESTRICTED_GUILD_ID) {
       const embed = new EmbedBuilder()
         .setTitle("🔔  Notifier")
-        .setDescription(
-          "Top up your balance and buy Notifier.\n" +
-          "💳 `/pay` · 💰 `/balance`"
-        )
+        .setDescription("Top up your balance and buy Notifier.\n💳 `/pay` · 💰 `/balance`")
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT });
 
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("btn_buy")
-          .setLabel("🔔 Notifier")
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId("btn_pay")
-          .setLabel("💳 Top Up")
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId("btn_balance")
-          .setLabel("💰 Balance")
-          .setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId("btn_buy").setLabel("🔔 BUY NOTIFIER").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("btn_pay").setLabel("💳 Top Up").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("btn_balance").setLabel("💰 Balance").setStyle(ButtonStyle.Secondary)
       );
-
       await channel.send({ embeds: [embed], components: [row] });
 
     // ── Other servers ───────────────────────────────────────────────────────
     } else {
       const embed = new EmbedBuilder()
-        .setTitle("🎫  Welcome!")
+        .setTitle("⚡  Shop")
         .setDescription("💳 `/pay` · 🛒 `/buy` · 💰 `/balance`")
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT });
 
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("btn_pay").setLabel("💳 Top Up").setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId("btn_buy").setLabel("🛒 Shop").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("btn_buy").setLabel("🛒 Buy").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId("btn_pay").setLabel("💳 Top Up").setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId("btn_balance").setLabel("💰 Balance").setStyle(ButtonStyle.Secondary)
       );
-
       await channel.send({ embeds: [embed], components: [row] });
     }
 
@@ -986,14 +959,10 @@ async function checkExpiredSubscriptions() {
       await user.send({
         embeds: [
           new EmbedBuilder()
-            .setTitle("⏰  Notifier Access Expired")
-            .setDescription(
-              "Your **Notifier** subscription has expired and your **Access** role has been removed.\n\n" +
-              "Use `/buy` to renew your access!"
-            )
+            .setTitle("⏰  Notifier Expired")
+            .setDescription("Your Notifier access has expired. Use `/buy` to renew.")
             .setColor(ERROR_COLOR)
             .setFooter({ text: FOOTER_TEXT })
-            .setTimestamp()
         ]
       });
     } catch {
@@ -1345,101 +1314,60 @@ function isPrivateServer(contact) {
 // ===== EMBEDS =====
 function buildMainMenuEmbed() {
   return new EmbedBuilder()
-    .setTitle("🏦  Nameless Paysystem")
+    .setTitle("⚡  Nameless Paysystem")
     .setDescription(
-      "**Secure · Instant · Anonymous**\n" +
-      "> Top up your balance using cryptocurrency"
-    )
-    .addFields(
-      {
-        name:   "💳  Payments",
-        value:  "`/pay` — Start a crypto top-up\n`/balance` — Check your balance\n`/buy` — Purchase products\n`/checktime` — Check Notifier time\n`/redeem` — Redeem a coupon",
-        inline: true
-      },
-      {
-        name:   "🔧  Staff",
-        value:  "`/forceadd` — Add balance to a user\n`/addtime` — Add time to user\n`/changetime` — Set custom time\n`/pause` — Pause/Resume timers\n`/addkey` — Add product keys\n`/keylist` — Manage keys\n`/userlist` — Active subscribers\n`/ban` — Revoke access\n`/compensate` — Add time to all\n`/generate` — Generate coupons",
-        inline: true
-      },
-      {
-        name:   "🪙  Supported Currencies",
-        value:  Object.entries(CURRENCIES)
-          .map(([code, c]) => `${c.emoji} **${code}** — ${c.name}`)
-          .join("\n"),
-        inline: false
-      },
-      {
-        name:   "🔑  Access Roles",
-        value:
-          `**${ROLE_ACCESS}** — Can use staff commands\n` +
-          `**${ROLE_ACCESS_PLUS}** — All above + receives payment notifications\n` +
-          `**${ROLE_NOTIFIER_ACCESS}** — Given to Notifier subscribers`,
-        inline: false
-      }
+      "💳 `/pay` — Top up balance\n" +
+      "🛒 `/buy` — Buy a product\n" +
+      "💰 `/balance` — Check balance\n" +
+      "⏰ `/checktime` — Check Notifier time\n" +
+      "🎟️ `/redeem` — Redeem coupon"
     )
     .setColor(BRAND_COLOR)
-    .setFooter({ text: FOOTER_TEXT })
-    .setTimestamp();
+    .setFooter({ text: FOOTER_TEXT });
 }
 
 function buildBalanceEmbed(userId, balance, username) {
-  const tier =
-    balance >= 500 ? "💎 VIP"
-    : balance >= 100 ? "🥇 Gold"
-    : balance >= 25  ? "🥈 Silver"
-    : "🥉 Bronze";
-
   return new EmbedBuilder()
-    .setTitle("💰  Wallet Balance")
-    .setDescription(`Account **@${username}** • ${tier}`)
+    .setTitle("💰  Balance")
     .addFields(
-      { name: "📊 Available Balance", value: `## \`${balance.toFixed(2)} USD\``, inline: false },
-      { name: "🆔 User ID",           value: `\`${userId}\``,                    inline: true  },
-      { name: "💡 Top Up",            value: "Use `/pay` to add funds",           inline: true  }
+      { name: "Balance", value: `**$${balance.toFixed(2)}**`, inline: true },
+      { name: "Top Up",  value: "Use `/pay`",                  inline: true }
     )
     .setColor(balance > 0 ? SUCCESS_COLOR : NEUTRAL_COLOR)
-    .setFooter({ text: FOOTER_TEXT })
-    .setTimestamp();
+    .setFooter({ text: FOOTER_TEXT });
 }
 
 async function buildShopEmbed(guildId) {
   const embed = new EmbedBuilder()
-    .setTitle("🛒  Product Shop")
-    .setDescription("Select a product to view pricing and purchase options.")
+    .setTitle("🛒  Shop")
     .setColor(BRAND_COLOR)
-    .setFooter({ text: FOOTER_TEXT })
-    .setTimestamp();
+    .setFooter({ text: FOOTER_TEXT });
 
   const products = getAvailableProducts(guildId);
 
   for (const [, product] of Object.entries(products)) {
     if (product.isAccess) {
-      const currentCount = getNotifierCurrentCountFast();
-      const available    = MAX_NOTIFIER_STOCK - currentCount;
-      const taken = currentCount;
+      const taken = getNotifierCurrentCountFast();
       const emoji = taken === 0 ? "🟢" : taken >= MAX_NOTIFIER_STOCK ? "🔴" : "🟡";
-      const stockStr = `${emoji} **${taken}/${MAX_NOTIFIER_STOCK}** slots taken` + (taken >= MAX_NOTIFIER_STOCK ? " — **SOLD OUT**" : "");
-      const priceInfo    = product.pricePerHour
-        ? `**$${product.pricePerHour} / hour** — choose any number of hours`
-        : product.tiers.map(t =>
-            `**${t.days} day${t.days > 1 ? "s" : ""}** — **$${t.price}**  🔔 Role access`
-          ).join("\n");
+      const stockStr = taken >= MAX_NOTIFIER_STOCK ? `🔴 SOLD OUT` : `${emoji} ${taken}/${MAX_NOTIFIER_STOCK} slots taken`;
+      const priceInfo = product.pricePerHour
+        ? `$${product.pricePerHour} / hour`
+        : product.tiers.map(t => `${t.days} day${t.days > 1 ? "s" : ""} — $${t.price}`).join(" · ");
       embed.addFields({
-        name:   `${product.emoji}  ${product.name}  •  ${stockStr}`,
-        value:  `${product.description}\n${priceInfo}\n🔔 Grants **${ROLE_NOTIFIER_ACCESS}** role`,
+        name:  `${product.emoji} ${product.name} — ${stockStr}`,
+        value: priceInfo,
         inline: false
       });
     } else {
       const tierInfo = await Promise.all(
         product.tiers.map(async t => {
           const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
-          const orig  = t.originalPrice ? ` ~~$${t.originalPrice}~~` : "";
-          return `**${t.days} day${t.days > 1 ? "s" : ""}** —${orig} **$${t.price}** 🔥  📦 \`${stock}\` in stock`;
+          return `${t.days} day${t.days > 1 ? "s" : ""} — **$${t.price}** (${stock} in stock)`;
         })
       );
       embed.addFields({
-        name:   `${product.emoji}  ${product.name}`,
-        value:  `${product.description}\n${tierInfo.join("\n")}`,
+        name:  `${product.emoji} ${product.name}`,
+        value: tierInfo.join("\n"),
         inline: false
       });
     }
@@ -1450,25 +1378,14 @@ async function buildShopEmbed(guildId) {
 
 function buildFunPayEmbed() {
   const resellersText = FUNPAY_RESELLERS
-    .map((r, i) => `**${i + 1}. ${r.name}**\n🔗 ${r.url}`)
-    .join("\n\n");
+    .map(r => `**${r.name}** — ${r.url}`)
+    .join("\n");
 
   return new EmbedBuilder()
-    .setTitle("🎮  Purchase via FunPay")
-    .setDescription(
-      "**Our Official Resellers:**\n\n" +
-      resellersText + "\n\n" +
-      "**📝 How to Purchase:**\n" +
-      "> 1️⃣ Click on a reseller link above\n" +
-      "> 2️⃣ Select the product you want\n" +
-      "> 3️⃣ Complete the purchase on FunPay\n" +
-      "> 4️⃣ Receive your key from the reseller\n\n" +
-      "⚠️ **Note:** Purchases through FunPay are handled by the resellers. " +
-      "Contact them directly for support."
-    )
+    .setTitle("🎮  FunPay Resellers")
+    .setDescription(resellersText + "\n\nClick a link, buy, receive your key.")
     .setColor(FUNPAY_COLOR)
-    .setFooter({ text: FOOTER_TEXT })
-    .setTimestamp();
+    .setFooter({ text: FOOTER_TEXT });
 }
 
 function buildPaymentEmbed(payment, currency, status = "waiting") {
@@ -1485,13 +1402,13 @@ function buildPaymentEmbed(payment, currency, status = "waiting") {
   if (status === "waiting") {
     embed.addFields(
       {
-        name:  "📬  Deposit Address",
+        name:  "📬  Send to this address",
         value: payment.pay_address ? `\`${payment.pay_address}\`` : "`Address pending...`"
       },
-      { name: "💸  Amount",    value: `\`${payment.pay_amount} ${payment.pay_currency}\``, inline: true },
-      { name: "💵  USD Value", value: `\`${payment.price_amount} USD\``,                   inline: true },
+      { name: "Amount",    value: `\`${payment.pay_amount} ${payment.pay_currency}\``, inline: true },
+      { name: "USD Value", value: `\`${payment.price_amount} USD\``,                   inline: true },
       {
-        name:  "⏱️  Expires",
+        name:  "Expires",
         value: payment.expiration_estimate_date
           ? `<t:${Math.floor(new Date(payment.expiration_estimate_date).getTime() / 1000)}:R>`
           : "`~20 minutes`",
@@ -1566,18 +1483,18 @@ const STATUS_CONFIG = {
 function buildPaymentMethodMenu() {
   const options = [
     new StringSelectMenuOptionBuilder()
-      .setLabel("💰 Pay with Balance")
-      .setDescription("Use your account balance")
+      .setLabel("Pay with Balance")
+      .setDescription("Use your balance — instant")
       .setValue("balance")
       .setEmoji("💳"),
     new StringSelectMenuOptionBuilder()
-      .setLabel("🎮 Pay via FunPay")
-      .setDescription("Purchase from our resellers")
+      .setLabel("Pay via FunPay")
+      .setDescription("Buy from our resellers")
       .setValue("funpay")
-      .setEmoji("🛒"),
+      .setEmoji("🎮"),
     new StringSelectMenuOptionBuilder()
-      .setLabel("🐸 Pay with Brainrots")
-      .setDescription("Trade your Roblox brainrots for access time")
+      .setLabel("Pay with Brainrots")
+      .setDescription("Trade Roblox brainrots for access")
       .setValue("brainrot")
       .setEmoji("🐸")
   ];
@@ -1585,7 +1502,7 @@ function buildPaymentMethodMenu() {
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId("select_payment_method")
-      .setPlaceholder("💳  Choose payment method...")
+      .setPlaceholder("Choose payment method...")
       .addOptions(options)
   );
 }
@@ -1842,8 +1759,8 @@ client.on("interactionCreate", async (interaction) => {
         await interaction.reply({
           embeds: [
             new EmbedBuilder()
-              .setTitle("🎫  Ticket-Only")
-              .setDescription("This bot can only be used inside **ticket** channels on this server.")
+              .setTitle("🎫  Tickets Only")
+              .setDescription("Please open a ticket to use this bot.")
               .setColor(WARNING_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ],
@@ -1888,10 +1805,7 @@ client.on("interactionCreate", async (interaction) => {
           embeds: [
             new EmbedBuilder()
               .setTitle("⏰  No Active Subscription")
-              .setDescription(
-                "You don't have an active **Notifier** subscription.\n\n" +
-                "Use `/buy` to purchase access!"
-              )
+              .setDescription("You don't have Notifier access. Use `/buy` to get it.")
               .setColor(NEUTRAL_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ]
@@ -1911,16 +1825,13 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.editReply({
         embeds: [
           new EmbedBuilder()
-            .setTitle("⏰  Notifier Subscription Status")
-            .setDescription(`Your **Notifier** access is active!${pauseNote}`)
+            .setTitle("⏰  Notifier Time")
             .addFields(
-              { name: "⏱️ Time Remaining", value: `\`${timeLeft}\``,                           inline: true },
-              { name: "📅 Expires",        value: `<t:${unixExpiry}:F>`,                       inline: true },
-              { name: "🔔 Status",         value: `**Active** — ${ROLE_NOTIFIER_ACCESS} role`, inline: false }
+              { name: "Remaining", value: `\`${timeLeft}\``,        inline: true },
+              { name: "Expires",   value: `<t:${unixExpiry}:R>`,    inline: true }
             )
             .setColor(isPaused ? PAUSE_COLOR : ACCESS_COLOR)
-            .setFooter({ text: FOOTER_TEXT })
-            .setTimestamp()
+            .setFooter({ text: isPaused ? "⏸️ Timers are paused · " + FOOTER_TEXT : FOOTER_TEXT })
         ]
       });
     }
@@ -1958,15 +1869,12 @@ client.on("interactionCreate", async (interaction) => {
         embeds: [
           new EmbedBuilder()
             .setTitle("🎟️  Coupon Redeemed!")
-            .setDescription(`Successfully added **$${result.amount.toFixed(2)}** to your balance!`)
             .addFields(
-              { name: "🎟️ Code",         value: `\`${code.toUpperCase()}\``,          inline: true },
-              { name: "➕ Amount Added",  value: `\`+$${result.amount.toFixed(2)}\``,  inline: true },
-              { name: "💰 New Balance",   value: `\`$${newBalance.toFixed(2)}\``,      inline: true }
+              { name: "Added",       value: `\`+$${result.amount.toFixed(2)}\``, inline: true },
+              { name: "New Balance", value: `\`$${newBalance.toFixed(2)}\``,     inline: true }
             )
             .setColor(COUPON_COLOR)
             .setFooter({ text: FOOTER_TEXT })
-            .setTimestamp()
         ]
       });
     }
@@ -2063,16 +1971,10 @@ client.on("interactionCreate", async (interaction) => {
     // /buy
     if (commandName === "buy") {
       const embed = new EmbedBuilder()
-        .setTitle("🛒  Purchase Products")
-        .setDescription(
-          "**Step 1 / 2** — Choose your payment method.\n\n" +
-          "💰 **Balance** — Use your account balance (instant delivery)\n" +
-          "🎮 **FunPay** — Purchase from our trusted resellers\n" +
-          "🐸 **Brainrots** — Trade your Roblox brainrots for access time"
-        )
+        .setTitle("🛒  Buy")
+        .setDescription("Choose how you want to pay:")
         .setColor(BRAND_COLOR)
-        .setFooter({ text: FOOTER_TEXT })
-        .setTimestamp();
+        .setFooter({ text: FOOTER_TEXT });
 
       return interaction.reply({
         embeds: [embed],
@@ -2084,8 +1986,8 @@ client.on("interactionCreate", async (interaction) => {
     // /pay
     if (commandName === "pay") {
       const embed = new EmbedBuilder()
-        .setTitle("💳  Top Up Balance")
-        .setDescription("**Step 1 / 2** — Choose the cryptocurrency you'd like to pay with.")
+        .setTitle("💳  Top Up")
+        .setDescription("Choose a cryptocurrency:")
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT });
       return interaction.reply({
@@ -2857,8 +2759,8 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.isButton()) {
     if (interaction.customId === "btn_pay") {
       const embed = new EmbedBuilder()
-        .setTitle("💳  Top Up Balance")
-        .setDescription("**Step 1 / 2** — Choose the cryptocurrency you'd like to pay with.")
+        .setTitle("💳  Top Up")
+        .setDescription("Choose a cryptocurrency:")
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT });
       return interaction.reply({
@@ -2878,16 +2780,10 @@ client.on("interactionCreate", async (interaction) => {
 
     if (interaction.customId === "btn_buy") {
       const embed = new EmbedBuilder()
-        .setTitle("🛒  Purchase Products")
-        .setDescription(
-          "**Step 1 / 2** — Choose your payment method.\n\n" +
-          "💰 **Balance** — Use your account balance (instant delivery)\n" +
-          "🎮 **FunPay** — Purchase from our trusted resellers\n" +
-          "🐸 **Brainrots** — Trade your Roblox brainrots for access time"
-        )
+        .setTitle("🛒  Buy")
+        .setDescription("Choose how you want to pay:")
         .setColor(BRAND_COLOR)
-        .setFooter({ text: FOOTER_TEXT })
-        .setTimestamp();
+        .setFooter({ text: FOOTER_TEXT });
 
       return interaction.reply({
         embeds: [embed],
@@ -3707,23 +3603,13 @@ client.on("interactionCreate", async (interaction) => {
             embeds: [
               new EmbedBuilder()
                 .setTitle("✅  Notifier Access Granted!")
-                .setDescription(
-                  `You now have access to the **${channelName}** channel!\n` +
-                  `The **${ROLE_NOTIFIER_ACCESS}** role has been given to you.`
-                )
                 .addFields(
-                  { name: "📅 Duration",    value: `\`${days} day${days > 1 ? "s" : ""}\``,                 inline: true },
-                  { name: "💵 Price",       value: `\`$${tier.price}\``,                                     inline: true },
-                  { name: "💰 New Balance", value: `\`$${newBalance.toFixed(2)}\``,                          inline: true },
-                  {
-                    name:  "⏰ Access Until",
-                    value: unixExpiry ? `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)` : "Unknown",
-                    inline: false
-                  }
+                  { name: "Duration",    value: `\`${days} day${days > 1 ? "s" : ""}\``,           inline: true },
+                  { name: "Expires",     value: unixExpiry ? `<t:${unixExpiry}:R>` : "Unknown",     inline: true },
+                  { name: "New Balance", value: `\`$${newBalance.toFixed(2)}\``,                    inline: true }
                 )
                 .setColor(ACCESS_COLOR)
-                .setFooter({ text: "Your role has been assigned • " + FOOTER_TEXT })
-                .setTimestamp()
+                .setFooter({ text: FOOTER_TEXT })
             ]
           });
 
@@ -3731,23 +3617,13 @@ client.on("interactionCreate", async (interaction) => {
             await interaction.user.send({
               embeds: [
                 new EmbedBuilder()
-                  .setTitle("🔔  Notifier Access Confirmation")
-                  .setDescription(
-                    `You've purchased **${product.name}** — **${days} day${days > 1 ? "s" : ""}** access to **${channelName}**!\n\n` +
-                    `Your **${ROLE_NOTIFIER_ACCESS}** role is now active.`
-                  )
+                  .setTitle("🔔  Notifier Access!")
+                  .setDescription(`You have **${days} day${days > 1 ? "s" : ""}** of Notifier access.`)
                   .addFields(
-                    { name: "📅 Duration", value: `\`${days} day${days > 1 ? "s" : ""}\``, inline: true },
-                    { name: "💵 Price",    value: `\`$${tier.price}\``,                     inline: true },
-                    {
-                      name:  "⏰ Expires",
-                      value: unixExpiry ? `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)` : "Unknown",
-                      inline: false
-                    }
+                    { name: "Expires", value: unixExpiry ? `<t:${unixExpiry}:F>` : "Unknown", inline: true }
                   )
                   .setColor(ACCESS_COLOR)
                   .setFooter({ text: FOOTER_TEXT })
-                  .setTimestamp()
               ]
             });
           } catch {
@@ -3766,9 +3642,7 @@ client.on("interactionCreate", async (interaction) => {
             embeds: [
               new EmbedBuilder()
                 .setTitle("📦  Out of Stock")
-                .setDescription(
-                  `**${product.name}** (${days} day${days > 1 ? "s" : ""}) is currently out of stock. Please check back later.`
-                )
+                .setDescription(`**Auto Joiner ${days}d** is out of stock. Check back later.`)
                 .setColor(WARNING_COLOR)
                 .setFooter({ text: FOOTER_TEXT })
             ]
@@ -3777,11 +3651,12 @@ client.on("interactionCreate", async (interaction) => {
 
         const deducted = await deductBalance(interaction.user.id, tier.price);
         if (!deducted) {
+          const bal = await getBalance(interaction.user.id);
           return interaction.editReply({
             embeds: [
               new EmbedBuilder()
-                .setTitle("❌  Payment Failed")
-                .setDescription("Could not process payment. Please try again.")
+                .setTitle("❌  Insufficient Balance")
+                .setDescription(`You need **$${tier.price}** but have **$${bal.toFixed(2)}**. Use \`/pay\` to top up.`)
                 .setColor(ERROR_COLOR)
                 .setFooter({ text: FOOTER_TEXT })
             ]
@@ -3797,15 +3672,13 @@ client.on("interactionCreate", async (interaction) => {
           embeds: [
             new EmbedBuilder()
               .setTitle("✅  Purchase Successful!")
-              .setDescription(`You've purchased **${product.name}** — ${tier.days} day${tier.days > 1 ? "s" : ""}`)
+              .setDescription(`**Auto Joiner ${tier.days}d** — key sent to your DMs.`)
               .addFields(
-                { name: "💵 Price",          value: `\`$${tier.price}\``,            inline: true },
-                { name: "💰 New Balance",     value: `\`$${newBalance.toFixed(2)}\``, inline: true },
-                { name: "📦 Remaining Stock", value: `\`${stock} keys\``,             inline: true }
+                { name: "Price",       value: `\`$${tier.price}\``,            inline: true },
+                { name: "New Balance", value: `\`$${newBalance.toFixed(2)}\``, inline: true }
               )
               .setColor(SUCCESS_COLOR)
-              .setFooter({ text: "Your key has been sent to your DMs • " + FOOTER_TEXT })
-              .setTimestamp()
+              .setFooter({ text: FOOTER_TEXT })
           ]
         });
 
@@ -3829,16 +3702,14 @@ client.on("interactionCreate", async (interaction) => {
           await interaction.user.send({
             embeds: [
               new EmbedBuilder()
-                .setTitle(`🔑  ${product.name} Key`)
-                .setDescription(`Your **${tier.days} day${tier.days > 1 ? "s" : ""}** license key:`)
+                .setTitle("🔑  Auto Joiner Key")
                 .addFields(
-                  { name: "🔐 License Key", value: `\`${key.key_value}\``,                            inline: false },
-                  { name: "⏱️ Duration",    value: `\`${tier.days} day${tier.days > 1 ? "s" : ""}\``, inline: true  },
-                  { name: "💵 Price",       value: `\`$${tier.price}\``,                               inline: true  }
+                  { name: "License Key", value: `\`${key.key_value}\``, inline: false },
+                  { name: "Duration",    value: `\`${tier.days}d\``,    inline: true  },
+                  { name: "Price",       value: `\`$${tier.price}\``,   inline: true  }
                 )
                 .setColor(SUCCESS_COLOR)
                 .setFooter({ text: FOOTER_TEXT })
-                .setTimestamp()
             ],
             files: [keyAttachment]
           });
@@ -3994,17 +3865,13 @@ client.on("interactionCreate", async (interaction) => {
               : "";
 
             const embed = new EmbedBuilder()
-              .setTitle(`${product.emoji}  ${product.name}  •  ${stockStr}`)
+              .setTitle(`🔔  Notifier — ${stockStr}`)
               .setDescription(
-                `${product.description}\n\n` +
-                `**💰 Pricing:**\n> 🕐 **$${product.pricePerHour} per hour** — choose any number of hours\n` +
-                `> Example: 6 hours = $${product.pricePerHour * 6} | 24 hours = $${product.pricePerHour * 24}\n\n` +
-                `🔔 Grants the **${ROLE_NOTIFIER_ACCESS}** role for the chosen duration.` +
-                subNote
+                `**$${product.pricePerHour} per hour**` +
+                (subNote ? subNote : "")
               )
               .setColor(available <= 0 ? ERROR_COLOR : ACCESS_COLOR)
-              .setFooter({ text: "Click the button below to choose your hours • " + FOOTER_TEXT })
-              .setTimestamp();
+              .setFooter({ text: FOOTER_TEXT });
 
             if (available <= 0) {
               const disabledRow = new ActionRowBuilder().addComponents(
@@ -4020,9 +3887,8 @@ client.on("interactionCreate", async (interaction) => {
             const buyRow = new ActionRowBuilder().addComponents(
               new ButtonBuilder()
                 .setCustomId("btn_notifier_hours")
-                .setLabel("🕐 Choose Hours & Buy")
-                .setStyle(ButtonStyle.Success)
-                .setEmoji("🔔")
+                .setLabel("🔔 Buy Notifier")
+                .setStyle(ButtonStyle.Primary)
             );
 
             return await interaction.editReply({ embeds: [embed], components: [buyRow] });
@@ -4085,17 +3951,13 @@ client.on("interactionCreate", async (interaction) => {
           : "";
 
         const embed = new EmbedBuilder()
-          .setTitle(`${product.emoji}  ${product.name}  •  ${stockStr}`)
+          .setTitle(`🔔  Notifier — ${stockStr}`)
           .setDescription(
-            `${product.description}\n\n` +
-            `**💰 Pricing:**\n> 🕐 **$${product.pricePerHour} per hour** — choose any number of hours\n` +
-            `> Example: 6 hours = $${product.pricePerHour * 6} | 24 hours = $${product.pricePerHour * 24}\n\n` +
-            `🔔 Grants the **${ROLE_NOTIFIER_ACCESS}** role for the chosen duration.` +
-            subNote
+            `**$${product.pricePerHour} per hour**` +
+            (subNote ? subNote : "")
           )
           .setColor(available <= 0 ? ERROR_COLOR : ACCESS_COLOR)
-          .setFooter({ text: "Click the button below to choose your hours • " + FOOTER_TEXT })
-          .setTimestamp();
+          .setFooter({ text: FOOTER_TEXT });
 
         if (available <= 0) {
           const disabledRow = new ActionRowBuilder().addComponents(
@@ -4205,14 +4067,10 @@ client.on("interactionCreate", async (interaction) => {
         return interaction.editReply({
           embeds: [
             new EmbedBuilder()
-              .setTitle("🛑  No Slots Available")
-              .setDescription(
-                `**Notifier** is currently full! (**${currentCount}/${MAX_NOTIFIER_STOCK}** slots occupied)\n\n` +
-                `Please check back later when a slot opens up.`
-              )
+              .setTitle("🛑  Sold Out")
+              .setDescription(`Notifier is full (${currentCount}/${MAX_NOTIFIER_STOCK}). Check back later.`)
               .setColor(ERROR_COLOR)
               .setFooter({ text: FOOTER_TEXT })
-              .setTimestamp()
           ]
         });
       }
@@ -4249,23 +4107,13 @@ client.on("interactionCreate", async (interaction) => {
         embeds: [
           new EmbedBuilder()
             .setTitle("✅  Notifier Access Granted!")
-            .setDescription(
-              `You now have access to the **${channelName}** channel!\n` +
-              `The **${ROLE_NOTIFIER_ACCESS}** role has been given to you.`
-            )
             .addFields(
-              { name: "🕐 Duration",    value: `\`${hours} hour${hours > 1 ? "s" : ""}\``,            inline: true },
-              { name: "💵 Price",       value: `\`$${price}\``,                                        inline: true },
-              { name: "💰 New Balance", value: `\`$${newBalance.toFixed(2)}\``,                        inline: true },
-              {
-                name:  "⏰ Access Until",
-                value: unixExpiry ? `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)` : "Unknown",
-                inline: false
-              }
+              { name: "Duration",    value: `\`${hours}h\``,                                       inline: true },
+              { name: "Expires",     value: unixExpiry ? `<t:${unixExpiry}:R>` : "Unknown",        inline: true },
+              { name: "New Balance", value: `\`$${newBalance.toFixed(2)}\``,                       inline: true }
             )
             .setColor(ACCESS_COLOR)
-            .setFooter({ text: "Your role has been assigned • " + FOOTER_TEXT })
-            .setTimestamp()
+            .setFooter({ text: FOOTER_TEXT })
         ]
       });
 
@@ -4273,23 +4121,13 @@ client.on("interactionCreate", async (interaction) => {
         await interaction.user.send({
           embeds: [
             new EmbedBuilder()
-              .setTitle("🔔  Notifier Access Confirmation")
-              .setDescription(
-                `You've purchased **${product.name}** — **${hours} hour${hours > 1 ? "s" : ""}** access to **${channelName}**!\n\n` +
-                `Your **${ROLE_NOTIFIER_ACCESS}** role is now active.`
-              )
+              .setTitle("🔔  Notifier Access!")
+              .setDescription(`You have **${hours} hour${hours > 1 ? "s" : ""}** of Notifier access.`)
               .addFields(
-                { name: "🕐 Duration", value: `\`${hours} hour${hours > 1 ? "s" : ""}\``, inline: true },
-                { name: "💵 Price",    value: `\`$${price}\``,                              inline: true },
-                {
-                  name:  "⏰ Expires",
-                  value: unixExpiry ? `<t:${unixExpiry}:F> (<t:${unixExpiry}:R>)` : "Unknown",
-                  inline: false
-                }
+                { name: "Expires", value: unixExpiry ? `<t:${unixExpiry}:F>` : "Unknown", inline: true }
               )
               .setColor(ACCESS_COLOR)
               .setFooter({ text: FOOTER_TEXT })
-              .setTimestamp()
           ]
         });
       } catch {
