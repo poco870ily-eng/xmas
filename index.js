@@ -468,33 +468,81 @@ client.on("channelCreate", async (channel) => {
     console.log(`🎫 New ticket channel created: "${channel.name}" in guild "${channel.guild.name}"`);
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    const welcomeEmbed = new EmbedBuilder()
-      .setTitle("🎫  Добро пожаловать! / Welcome!")
-      .setDescription(
-        "**🇷🇺 Используй команды ниже для покупки:**\n" +
-        "💳 `/pay` — пополнить баланс крипто\n" +
-        "🛒 `/buy` — купить товар\n" +
-        "💰 `/balance` — посмотреть баланс\n" +
-        "🔥 **Сейчас действует скидка $10 на все товары!**\n\n" +
-        "**🇬🇧 Use the commands below to purchase:**\n" +
-        "💳 `/pay` — top up balance with crypto\n" +
-        "🛒 `/buy` — purchase a product\n" +
-        "💰 `/balance` — check your balance\n" +
-        "🔥 **LIMITED SALE — $10 OFF all products!**\n" +
-        "🧠 You can also pay with **Brainrots** using `/buy`!\n\n" +
-        "🪙 **Принимаем / Accepted:** Bitcoin • Litecoin • USDT • TRON • BNB"
-      )
-      .setColor(BRAND_COLOR)
-      .setFooter({ text: FOOTER_TEXT })
-      .setTimestamp();
+    const guildId = channel.guild.id;
 
-    const actionRow = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("btn_pay").setLabel("💳 Пополнить / Top Up").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId("btn_buy").setLabel("🛒 Купить / Shop").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("btn_balance").setLabel("💰 Баланс / Balance").setStyle(ButtonStyle.Secondary)
-    );
+    // ── Auto Joiner server ──────────────────────────────────────────────────
+    if (guildId === SECOND_GUILD_ID) {
+      const embed = new EmbedBuilder()
+        .setTitle("🚀  Auto Joiner")
+        .setDescription(
+          "Top up your balance and buy Auto Joiner.\n" +
+          "💳 `/pay` · 💰 `/balance`"
+        )
+        .setColor(BRAND_COLOR)
+        .setFooter({ text: FOOTER_TEXT });
 
-    await channel.send({ embeds: [welcomeEmbed], components: [actionRow] });
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("btn_buy")
+          .setLabel("🚀 BUY AUTO JOINER")
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId("btn_pay")
+          .setLabel("💳 Top Up")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId("btn_balance")
+          .setLabel("💰 Balance")
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      await channel.send({ embeds: [embed], components: [row] });
+
+    // ── Notifier server ─────────────────────────────────────────────────────
+    } else if (guildId === RESTRICTED_GUILD_ID) {
+      const embed = new EmbedBuilder()
+        .setTitle("🔔  Notifier")
+        .setDescription(
+          "Top up your balance and buy Notifier.\n" +
+          "💳 `/pay` · 💰 `/balance`"
+        )
+        .setColor(BRAND_COLOR)
+        .setFooter({ text: FOOTER_TEXT });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("btn_buy")
+          .setLabel("🔔 Notifier")
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId("btn_pay")
+          .setLabel("💳 Top Up")
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId("btn_balance")
+          .setLabel("💰 Balance")
+          .setStyle(ButtonStyle.Secondary)
+      );
+
+      await channel.send({ embeds: [embed], components: [row] });
+
+    // ── Other servers ───────────────────────────────────────────────────────
+    } else {
+      const embed = new EmbedBuilder()
+        .setTitle("🎫  Welcome!")
+        .setDescription("💳 `/pay` · 🛒 `/buy` · 💰 `/balance`")
+        .setColor(BRAND_COLOR)
+        .setFooter({ text: FOOTER_TEXT });
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("btn_pay").setLabel("💳 Top Up").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId("btn_buy").setLabel("🛒 Shop").setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId("btn_balance").setLabel("💰 Balance").setStyle(ButtonStyle.Secondary)
+      );
+
+      await channel.send({ embeds: [embed], components: [row] });
+    }
+
     console.log(`✅ Sent welcome message to channel "${channel.name}"`);
   } catch (error) {
     console.error(`❌ Error sending welcome message to new channel:`, error.message);
