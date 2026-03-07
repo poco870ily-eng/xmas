@@ -377,6 +377,56 @@ client.once("ready", async () => {
 
   setTimeout(() => updateStockChannel(), 5000);
   setInterval(updateStockChannel, 5 * 60 * 1000);
+
+  // ===== AUTO JOINER PROMO — каждые 12 часов =====
+  const PROMO_CHANNEL_ID = "1431170415170031709";
+  let lastPromoMessageId = null;
+
+  async function sendPromoMessage() {
+    try {
+      const channel = await client.channels.fetch(PROMO_CHANNEL_ID);
+      if (!channel) return console.warn("⚠️ Promo channel not found");
+
+      // Удаляем предыдущее сообщение
+      if (lastPromoMessageId) {
+        try {
+          const old = await channel.messages.fetch(lastPromoMessageId);
+          await old.delete();
+        } catch {
+          // Сообщение уже удалено или недоступно
+        }
+        lastPromoMessageId = null;
+      }
+
+      const promoEmbed = new EmbedBuilder()
+        .setTitle("🚗  Auto Joiner — Купи прямо сейчас!")
+        .setDescription(
+          "Хочешь автоматически вступать в каналы и группы без лишних действий?\n\n" +
+          "**Auto Joiner** — твой незаменимый инструмент!\n\n" +
+          "✅ Мгновенное вступление\n" +
+          "✅ Работает 24/7\n" +
+          "✅ Доступные тарифы: **1 день**, **2 дня**, **3 дня**\n\n" +
+          "👉 Используй `/buy` чтобы приобрести прямо сейчас!"
+        )
+        .setColor(0x5865F2)
+        .setFooter({ text: "Авто-напоминание каждые 12 часов" })
+        .setTimestamp();
+
+      const msg = await channel.send({
+        content: "@here",
+        embeds: [promoEmbed]
+      });
+
+      lastPromoMessageId = msg.id;
+      console.log(`📢 Promo message sent (id: ${msg.id})`);
+    } catch (err) {
+      console.error("❌ Promo send error:", err.message);
+    }
+  }
+
+  // Первый запуск через 5 секунд после старта, затем каждые 12 часов
+  setTimeout(sendPromoMessage, 5000);
+  setInterval(sendPromoMessage, 12 * 60 * 60 * 1000);
 });
 
 client.on("guildCreate", (guild) => {
@@ -4746,6 +4796,26 @@ async function processPayment(interaction, userId, amount, currency) {
       });
     } catch {
       await interaction.editReply({ embeds: [embed], components: [] });
+    }
+
+    // ===== NOTIFY OWNER about new payment =====
+    try {
+      const owner = await client.users.fetch(OWNER_ID);
+      const payer = await client.users.fetch(userId).catch(() => null);
+      const ownerEmbed = new EmbedBuilder()
+        .setTitle("💳  Новая оплата создана!")
+        .setColor(0xFEE75C)
+        .addFields(
+          { name: "👤 Пользователь", value: payer ? `${payer.tag} (<@${userId}>)` : `<@${userId}>`, inline: true },
+          { name: "💵 Сумма",        value: `\`${amount} USD\``,                                      inline: true },
+          { name: "🪙 Валюта",       value: `\`${currency}\``,                                        inline: true },
+          { name: "🆔 Payment ID",   value: `\`${payment.payment_id}\``,                              inline: false }
+        )
+        .setFooter({ text: FOOTER_TEXT })
+        .setTimestamp();
+      await owner.send({ embeds: [ownerEmbed] });
+    } catch (ownerErr) {
+      console.warn("⚠️ Не удалось уведомить овнера о новой оплате:", ownerErr.message);
     }
 
     setTimeout(() => pendingPayments.delete(userId), 30 * 60 * 1000);
