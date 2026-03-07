@@ -2815,19 +2815,6 @@ client.on("interactionCreate", async (interaction) => {
         });
       }
 
-      if (offer.receiverId) {
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️  Уже принято")
-              .setDescription("Другой получатель уже принял это предложение.")
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ],
-          ephemeral: true
-        });
-      }
-
       // Mark this receiver as the one who accepted
       offer.receiverId = interaction.user.id;
       brainrotOffers.set(offerId, offer);
@@ -2914,20 +2901,6 @@ client.on("interactionCreate", async (interaction) => {
             new EmbedBuilder()
               .setTitle("⚠️  Предложение истекло")
               .setDescription("Это предложение больше не существует.")
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ],
-          ephemeral: true
-        });
-      }
-
-      // Don't let receiver decline if another already accepted
-      if (offer.receiverId && offer.receiverId !== interaction.user.id) {
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️  Уже обработано")
-              .setDescription("Другой получатель уже обработал это предложение.")
               .setColor(WARNING_COLOR)
               .setFooter({ text: FOOTER_TEXT })
           ],
