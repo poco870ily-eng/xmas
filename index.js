@@ -398,23 +398,11 @@ client.once("ready", async () => {
         lastPromoMessageId = null;
       }
 
-      const promoEmbed = new EmbedBuilder()
-        .setTitle("🚗  Auto Joiner — Купи прямо сейчас!")
-        .setDescription(
-          "Хочешь автоматически вступать в каналы и группы без лишних действий?\n\n" +
-          "**Auto Joiner** — твой незаменимый инструмент!\n\n" +
-          "✅ Мгновенное вступление\n" +
-          "✅ Работает 24/7\n" +
-          "✅ Доступные тарифы: **1 день**, **2 дня**, **3 дня**\n\n" +
-          "👉 Используй `/buy` чтобы приобрести прямо сейчас!"
-        )
-        .setColor(0x5865F2)
-        .setFooter({ text: "Авто-напоминание каждые 12 часов" })
-        .setTimestamp();
+      const hereMsg = await channel.send({ content: "@here" });
+      hereMsg.delete().catch(() => {});
 
       const msg = await channel.send({
-        content: "@here",
-        embeds: [promoEmbed]
+        content: "**Auto Joiner** available — 1 / 2 / 3 day keys in stock. Use `/buy` to purchase."
       });
 
       lastPromoMessageId = msg.id;
