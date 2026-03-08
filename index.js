@@ -1154,15 +1154,33 @@ async function redeemCoupon(code, userId) {
 }
 
 // ===== PAYMENT MESSAGE TRACKING =====
-const paymentMessages = new Map();
-
+// Uses Supabase so mapping survives bot restarts
+// Required table: payment_messages (payment_id text PK, user_id text, message_id text, channel_id text, created_at timestamptz)
 async function savePaymentMessage(paymentId, userId, messageId, channelId) {
-  paymentMessages.set(paymentId, { userId, messageId, channelId });
-  console.log(`💾 Saved payment message: ${paymentId} -> msg ${messageId}`);
+  const { error } = await supabase.from("payment_messages").upsert({
+    payment_id: paymentId.toString(),
+    user_id:    userId.toString(),
+    message_id: messageId.toString(),
+    channel_id: channelId.toString(),
+    created_at: new Date().toISOString()
+  }, { onConflict: "payment_id" });
+
+  if (error) {
+    console.error(`❌ savePaymentMessage error for ${paymentId}:`, error.message);
+  } else {
+    console.log(`💾 Saved payment message: ${paymentId} -> msg ${messageId}`);
+  }
 }
 
 async function getPaymentMessage(paymentId) {
-  return paymentMessages.get(paymentId);
+  const { data, error } = await supabase
+    .from("payment_messages")
+    .select("user_id, message_id, channel_id")
+    .eq("payment_id", paymentId.toString())
+    .single();
+
+  if (error || !data) return null;
+  return { userId: data.user_id, messageId: data.message_id, channelId: data.channel_id };
 }
 
 // ===== KEY HELPERS =====
@@ -4823,12 +4841,27 @@ async function processPayment(interaction, userId, amount, currency) {
 }
 
 // ===== IPN VERIFY =====
+function sortObjectDeep(obj) {
+  if (Array.isArray(obj)) return obj.map(sortObjectDeep);
+  if (obj !== null && typeof obj === "object") {
+    return Object.keys(obj).sort().reduce((acc, key) => {
+      acc[key] = sortObjectDeep(obj[key]);
+      return acc;
+    }, {});
+  }
+  return obj;
+}
+
 function verifyIPN(req) {
+  // NowPayments requires keys to be sorted alphabetically before hashing
+  const sorted = sortObjectDeep(req.body);
   const hmac = crypto
     .createHmac("sha512", IPN_SECRET)
-    .update(JSON.stringify(req.body))
+    .update(JSON.stringify(sorted))
     .digest("hex");
-  return hmac === req.headers["x-nowpayments-sig"];
+  const sig = req.headers["x-nowpayments-sig"];
+  console.log(`🔐 IPN verify — computed: ${hmac.slice(0, 16)}... header: ${sig?.slice(0, 16)}...`);
+  return hmac === sig;
 }
 
 // ===== WEB SERVER =====
