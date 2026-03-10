@@ -378,7 +378,7 @@ client.once("ready", async () => {
   setTimeout(() => updateStockChannel(), 5000);
   setInterval(updateStockChannel, 5 * 60 * 1000);
 
-  // ===== AUTO JOINER PROMO — каждые 12 часов =====
+  // ===== AUTO JOINER PROMO — каждое воскресенье в 00:30 по Астане (UTC+5) =====
   const PROMO_CHANNEL_ID = "1431170415170031709";
   let lastPromoMessageId = null;
 
@@ -412,9 +412,49 @@ client.once("ready", async () => {
     }
   }
 
-  // Первый запуск через 5 секунд после старта, затем каждые 12 часов
-  setTimeout(sendPromoMessage, 5000);
-  setInterval(sendPromoMessage, 12 * 60 * 60 * 1000);
+  // Вычисляет миллисекунды до следующего воскресенья в 00:30 по Астане (UTC+5)
+  function msUntilNextSundayAstana() {
+    const ASTANA_OFFSET_MS = 5 * 60 * 60 * 1000; // UTC+5
+    const now = Date.now();
+    const nowAstana = new Date(now + ASTANA_OFFSET_MS);
+
+    // Целевое время: воскресенье (0), 00:30:00
+    const TARGET_HOUR   = 0;
+    const TARGET_MINUTE = 30;
+
+    // Находим ближайшее воскресенье 00:30 Астана, которое ещё не наступило
+    const dayOfWeek = nowAstana.getUTCDay(); // 0=Вс, 1=Пн, ..., 6=Сб
+    let daysUntilSunday = (7 - dayOfWeek) % 7; // дней до следующего воскресенья
+
+    // Проверяем: если сегодня воскресенье, но 00:30 уже прошло — берём следующую неделю
+    if (daysUntilSunday === 0) {
+      const currentMinutes = nowAstana.getUTCHours() * 60 + nowAstana.getUTCMinutes();
+      const targetMinutes  = TARGET_HOUR * 60 + TARGET_MINUTE;
+      if (currentMinutes >= targetMinutes) daysUntilSunday = 7;
+    }
+
+    // Строим точную дату следующего воскресенья 00:30 Астана = UTC
+    const nextSundayAstana = new Date(nowAstana);
+    nextSundayAstana.setUTCDate(nowAstana.getUTCDate() + daysUntilSunday);
+    nextSundayAstana.setUTCHours(TARGET_HOUR, TARGET_MINUTE, 0, 0);
+
+    const nextSundayUTC = nextSundayAstana.getTime() - ASTANA_OFFSET_MS;
+    const delay = nextSundayUTC - now;
+
+    console.log(`⏰ Следующая promo-рассылка: ${new Date(nextSundayUTC).toISOString()} UTC (через ${Math.round(delay / 3600000 * 10) / 10} ч.)`);
+    return delay;
+  }
+
+  // Планировщик: запускает promo и перепланирует на следующую неделю
+  function schedulePromo() {
+    const delay = msUntilNextSundayAstana();
+    setTimeout(() => {
+      sendPromoMessage();
+      schedulePromo(); // перепланировать на следующую неделю
+    }, delay);
+  }
+
+  schedulePromo();
 });
 
 client.on("guildCreate", (guild) => {
