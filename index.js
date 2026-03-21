@@ -418,9 +418,9 @@ client.once("ready", async () => {
     const now = Date.now();
     const nowAstana = new Date(now + ASTANA_OFFSET_MS);
 
-    // Целевое время: воскресенье (0), 00:30:00
-    const TARGET_HOUR   = 0;
-    const TARGET_MINUTE = 30;
+    // Целевое время: воскресенье (0), 11:40:00
+    const TARGET_HOUR   = 11;
+    const TARGET_MINUTE = 40;
 
     // Находим ближайшее воскресенье 00:30 Астана, которое ещё не наступило
     const dayOfWeek = nowAstana.getUTCDay(); // 0=Вс, 1=Пн, ..., 6=Сб
