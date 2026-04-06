@@ -40,6 +40,12 @@ const RESTRICTED_GUILD_IDS = new Set([RESTRICTED_GUILD_ID, SECOND_GUILD_ID]);
 const MAX_NOTIFIER_STOCK = 15;
 const STOCK_CHANNEL_ID   = "1474349576814334047";
 
+// ===== AUTO JOINER KEY DELIVERY CHANNEL =====
+// Bot posts key notifications here; users pick up keys via buttons (no typing allowed for others)
+const AUTO_JOINER_KEY_CHANNEL_ID = "1490238422537736303";
+// pendingKeys: Map<deliveryId, { userId, keyValue, days, price, expiresAt }>
+const pendingKeys = new Map();
+
 // ===== ROLE NAMES =====
 const ROLE_ACCESS           = "Pay Access";
 const ROLE_ACCESS_PLUS      = "Pay Access+";
@@ -2853,6 +2859,73 @@ client.on("interactionCreate", async (interaction) => {
 
   // ──────────── BUTTONS ────────────
   if (interaction.isButton()) {
+
+    // ── Auto Joiner key pickup button ──
+    if (interaction.customId.startsWith("pickup_key_")) {
+      const deliveryId = interaction.customId.slice("pickup_key_".length);
+      const pending    = pendingKeys.get(deliveryId);
+
+      if (!pending) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⏰  Ключ недоступен")
+              .setDescription("Этот ключ уже был получен или истёк срок действия ссылки.")
+              .setColor(WARNING_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      // Only the intended buyer can claim the key
+      if (interaction.user.id !== pending.userId) {
+        return interaction.reply({
+          embeds: [
+            new EmbedBuilder()
+              .setTitle("⛔  Нет доступа")
+              .setDescription("Этот ключ предназначен не для тебя.")
+              .setColor(ERROR_COLOR)
+              .setFooter({ text: FOOTER_TEXT })
+          ],
+          ephemeral: true
+        });
+      }
+
+      // Remove so it can only be claimed once
+      pendingKeys.delete(deliveryId);
+
+      // Disable the button on the original message
+      try {
+        const disabledRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`pickup_key_${deliveryId}`)
+            .setLabel("✅ Ключ получен")
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(true)
+        );
+        await interaction.message.edit({ components: [disabledRow] });
+      } catch { /* ignore if message edit fails */ }
+
+      // Show the key only to the buyer (ephemeral)
+      return interaction.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle("🔑  Твой ключ Auto Joiner")
+            .setDescription("Сохрани ключ в надёжном месте — он показывается только один раз!")
+            .addFields(
+              { name: "🔑 License Key", value: `\`${pending.keyValue}\``, inline: false },
+              { name: "🗓️ Duration",    value: `\`${pending.days} day${pending.days > 1 ? "s" : ""}\``, inline: true },
+              ...(pending.price != null ? [{ name: "💵 Price", value: `\`$${pending.price}\``, inline: true }] : [])
+            )
+            .setColor(SUCCESS_COLOR)
+            .setFooter({ text: FOOTER_TEXT })
+            .setTimestamp()
+        ],
+        ephemeral: true
+      });
+    }
+
     if (interaction.customId === "btn_pay") {
       const embed = new EmbedBuilder()
         .setTitle("💳  Top Up")
@@ -3380,46 +3453,66 @@ client.on("interactionCreate", async (interaction) => {
       await markKeyAsUsed(key.id, offer.buyerId);
       brainrotOffers.delete(offerId);
 
-      // Notify buyer (English)
+      // ── Notify buyer via channel button ──
       try {
         const buyer = await client.users.fetch(offer.buyerId);
 
-        const keyFileContent =
-          `Auto Joiner License Key (Brainrot Trade)\n` +
-          `==========================================\n\n` +
-          `Product: Auto Joiner\n` +
-          `Duration: ${days} day${days > 1 ? "s" : ""}\n` +
-          `Date: ${new Date().toISOString()}\n\n` +
-          `License Key:\n${key.key_value}\n\n` +
-          `==========================================\n` +
-          `Keep this key safe and secure.\n`;
-
-        const keyAttachment = new AttachmentBuilder(
-          Buffer.from(keyFileContent, "utf-8"),
-          { name: `AutoJoiner_Key_${Date.now()}.txt` }
-        );
-
-        await buyer.send({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("🎉  Auto Joiner Key Received!")
-              .setDescription(
-                `The receiver has accepted your brainrot offer and sent you an **Auto Joiner** key!`
-              )
-              .addFields(
-                { name: "🔑 License Key",   value: `\`${key.key_value}\``,                                inline: false },
-                { name: "⏱️ Duration",      value: `\`${days} day${days > 1 ? "s" : ""}\``,              inline: true  },
-                { name: "🐸 Brainrot",      value: `\`${offer.brainrotInfo}\``,                           inline: true  }
-              )
-              .setColor(SUCCESS_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-              .setTimestamp()
-          ],
-          files: [keyAttachment]
+        const deliveryId = `key_${offer.buyerId}_${Date.now()}`;
+        pendingKeys.set(deliveryId, {
+          userId:   offer.buyerId,
+          keyValue: key.key_value,
+          days,
+          price:    null  // brainrot trade — no USD price
         });
-        console.log(`📬 Auto Joiner key sent to buyer ${offer.buyerId}`);
-      } catch {
-        console.log(`⚠️ Could not DM buyer ${offer.buyerId} with Auto Joiner key`);
+        setTimeout(() => pendingKeys.delete(deliveryId), 24 * 60 * 60 * 1000);
+
+        const keyChannel = await client.channels.fetch(AUTO_JOINER_KEY_CHANNEL_ID).catch(() => null);
+        if (keyChannel) {
+          const notifyRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`pickup_key_${deliveryId}`)
+              .setLabel("🔑 Получить ключ")
+              .setStyle(ButtonStyle.Success)
+          );
+          await keyChannel.send({
+            content: `<@${offer.buyerId}>`,
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("🎉  Auto Joiner Key Received!")
+                .setDescription(
+                  `Receiver принял твой brainrot offer!\n` +
+                  `Нажми кнопку ниже, чтобы получить ключ.\n` +
+                  `> ⚠️ Кнопка работает только для тебя.`
+                )
+                .addFields(
+                  { name: "🗓️ Duration", value: `\`${days} day${days > 1 ? "s" : ""}\``, inline: true },
+                  { name: "🐸 Brainrot", value: `\`${offer.brainrotInfo}\``,              inline: true }
+                )
+                .setColor(SUCCESS_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+                .setTimestamp()
+            ],
+            components: [notifyRow]
+          });
+          console.log(`📬 Auto Joiner key delivery posted in channel for buyer ${offer.buyerId}`);
+        } else {
+          // Fallback to DM if channel not found
+          await buyer.send({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("🎉  Auto Joiner Key Received!")
+                .addFields(
+                  { name: "🔑 License Key", value: `\`${key.key_value}\``,                     inline: false },
+                  { name: "⏱️ Duration",    value: `\`${days} day${days > 1 ? "s" : ""}\``,   inline: true  },
+                  { name: "🐸 Brainrot",    value: `\`${offer.brainrotInfo}\``,                 inline: true  }
+                )
+                .setColor(SUCCESS_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+            ]
+          }).catch(() => {});
+        }
+      } catch (deliveryErr) {
+        console.log(`⚠️ Brainrot key delivery error for buyer ${offer.buyerId}:`, deliveryErr.message);
       }
 
       const newStock = await getAvailableKeyCount(storageId);
@@ -3741,7 +3834,7 @@ client.on("interactionCreate", async (interaction) => {
           embeds: [
             new EmbedBuilder()
               .setTitle("✅  Purchase Successful!")
-              .setDescription(`**Auto Joiner ${tier.days}d** — key sent to your DMs.`)
+              .setDescription(`**Auto Joiner ${tier.days}d** — нажми кнопку **🔑 Получить ключ** в канале с ключами!`)
               .addFields(
                 { name: "Price",       value: `\`$${tier.price}\``,            inline: true },
                 { name: "New Balance", value: `\`$${newBalance.toFixed(2)}\``, inline: true }
@@ -3751,40 +3844,64 @@ client.on("interactionCreate", async (interaction) => {
           ]
         });
 
+        // ── Deliver key via channel button instead of DM ──
         try {
-          const keyFileContent =
-            `${product.name} License Key\n` +
-            `========================\n\n` +
-            `Product: ${product.name}\n` +
-            `Duration: ${tier.days} day${tier.days > 1 ? "s" : ""}\n` +
-            `Price: $${tier.price}\n` +
-            `Purchase Date: ${new Date().toISOString()}\n\n` +
-            `License Key:\n${key.key_value}\n\n` +
-            `========================\n` +
-            `Keep this key safe and secure.\n`;
-
-          const keyAttachment = new AttachmentBuilder(
-            Buffer.from(keyFileContent, "utf-8"),
-            { name: `${product.name.replace(/\s+/g, "_")}_Key_${Date.now()}.txt` }
-          );
-
-          await interaction.user.send({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("🔑  Auto Joiner Key")
-                .addFields(
-                  { name: "License Key", value: `\`${key.key_value}\``, inline: false },
-                  { name: "Duration",    value: `\`${tier.days}d\``,    inline: true  },
-                  { name: "Price",       value: `\`$${tier.price}\``,   inline: true  }
-                )
-                .setColor(SUCCESS_COLOR)
-                .setFooter({ text: FOOTER_TEXT })
-            ],
-            files: [keyAttachment]
+          const deliveryId = `key_${interaction.user.id}_${Date.now()}`;
+          pendingKeys.set(deliveryId, {
+            userId:   interaction.user.id,
+            keyValue: key.key_value,
+            days:     tier.days,
+            price:    tier.price
           });
-          console.log(`📬 Key sent to ${interaction.user.tag}`);
-        } catch (dmErr) {
-          console.log(`⚠️ Could not DM key to ${interaction.user.tag}:`, dmErr.message);
+          // Auto-expire after 24h
+          setTimeout(() => pendingKeys.delete(deliveryId), 24 * 60 * 60 * 1000);
+
+          const keyChannel = await client.channels.fetch(AUTO_JOINER_KEY_CHANNEL_ID).catch(() => null);
+          if (keyChannel) {
+            const notifyRow = new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`pickup_key_${deliveryId}`)
+                .setLabel("🔑 Получить ключ")
+                .setStyle(ButtonStyle.Success)
+            );
+            await keyChannel.send({
+              content: `<@${interaction.user.id}>`,
+              embeds: [
+                new EmbedBuilder()
+                  .setTitle("🎉  Auto Joiner — покупка выполнена!")
+                  .setDescription(
+                    `Нажми кнопку ниже, чтобы получить свой ключ.\n` +
+                    `> ⚠️ Кнопка работает только для тебя.`
+                  )
+                  .addFields(
+                    { name: "🗓️ Duration", value: `\`${tier.days} day${tier.days > 1 ? "s" : ""}\``, inline: true },
+                    { name: "💵 Price",    value: `\`$${tier.price}\``,                              inline: true }
+                  )
+                  .setColor(SUCCESS_COLOR)
+                  .setFooter({ text: FOOTER_TEXT })
+                  .setTimestamp()
+              ],
+              components: [notifyRow]
+            });
+            console.log(`📬 Key delivery posted in channel for ${interaction.user.tag}`);
+          } else {
+            console.warn(`⚠️ AUTO_JOINER_KEY_CHANNEL_ID not found — falling back to DM`);
+            await interaction.user.send({
+              embeds: [
+                new EmbedBuilder()
+                  .setTitle("🔑  Auto Joiner Key")
+                  .addFields(
+                    { name: "License Key", value: `\`${key.key_value}\``, inline: false },
+                    { name: "Duration",    value: `\`${tier.days}d\``,    inline: true  },
+                    { name: "Price",       value: `\`$${tier.price}\``,   inline: true  }
+                  )
+                  .setColor(SUCCESS_COLOR)
+                  .setFooter({ text: FOOTER_TEXT })
+              ]
+            }).catch(() => {});
+          }
+        } catch (deliveryErr) {
+          console.log(`⚠️ Key delivery error for ${interaction.user.tag}:`, deliveryErr.message);
         }
 
       } catch (err) {
