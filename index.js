@@ -3466,7 +3466,12 @@ client.on("interactionCreate", async (interaction) => {
         });
         setTimeout(() => pendingKeys.delete(deliveryId), 24 * 60 * 60 * 1000);
 
-        const keyChannel = await client.channels.fetch(AUTO_JOINER_KEY_CHANNEL_ID).catch(() => null);
+        console.log(`🔍 [brainrot] Fetching key channel ${AUTO_JOINER_KEY_CHANNEL_ID}...`);
+        const keyChannel = await client.channels.fetch(AUTO_JOINER_KEY_CHANNEL_ID).catch(err => {
+          console.error(`❌ [brainrot] Failed to fetch key channel: ${err.message}`);
+          return null;
+        });
+        console.log(`🔍 [brainrot] keyChannel = ${keyChannel ? `#${keyChannel.name} (${keyChannel.id})` : "null"}`);
         if (keyChannel) {
           const notifyRow = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
@@ -3856,7 +3861,12 @@ client.on("interactionCreate", async (interaction) => {
           // Auto-expire after 24h
           setTimeout(() => pendingKeys.delete(deliveryId), 24 * 60 * 60 * 1000);
 
-          const keyChannel = await client.channels.fetch(AUTO_JOINER_KEY_CHANNEL_ID).catch(() => null);
+          console.log(`🔍 [balance buy] Fetching key channel ${AUTO_JOINER_KEY_CHANNEL_ID}...`);
+          const keyChannel = await client.channels.fetch(AUTO_JOINER_KEY_CHANNEL_ID).catch(err => {
+            console.error(`❌ [balance buy] Failed to fetch key channel: ${err.message}`);
+            return null;
+          });
+          console.log(`🔍 [balance buy] keyChannel = ${keyChannel ? `#${keyChannel.name} (${keyChannel.id})` : "null"}`);
           if (keyChannel) {
             const notifyRow = new ActionRowBuilder().addComponents(
               new ButtonBuilder()
