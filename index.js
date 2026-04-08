@@ -40,8 +40,8 @@ const RESTRICTED_GUILD_IDS = new Set([RESTRICTED_GUILD_ID, SECOND_GUILD_ID]);
 const MAX_NOTIFIER_STOCK = 15;
 const STOCK_CHANNEL_ID   = "1474349576814334047";
 
-// ===== AUTO JOINER SHOP CHANNEL (read-only for users, bot posts keys here) =====
-const SHOP_CHANNEL_ID = "1490238422537736303";
+// ===== AUTO JOINER SHOP CHANNEL (read-only for users, bot posts UI here) =====
+const AUTO_JOINER_SHOP_CHANNEL_ID = "1490238422537736303";
 
 // ===== ROLE NAMES =====
 const ROLE_ACCESS           = "Pay Access";
@@ -381,6 +381,48 @@ client.once("ready", async () => {
   setTimeout(() => updateStockChannel(), 5000);
   setInterval(updateStockChannel, 5 * 60 * 1000);
 
+  // ===== POST AUTO JOINER SHOP UI IN DEDICATED CHANNEL =====
+  async function postAutoJoinerShopUI() {
+    try {
+      const channel = await client.channels.fetch(AUTO_JOINER_SHOP_CHANNEL_ID).catch(() => null);
+      if (!channel) return console.warn("⚠️ Auto Joiner shop channel not found:", AUTO_JOINER_SHOP_CHANNEL_ID);
+
+      // Delete previous bot messages in the channel to keep it clean
+      try {
+        const messages = await channel.messages.fetch({ limit: 20 });
+        const botMsgs  = messages.filter(m => m.author.id === client.user.id);
+        for (const [, msg] of botMsgs) {
+          await msg.delete().catch(() => {});
+        }
+      } catch { /* ignore */ }
+
+      const embed = new EmbedBuilder()
+        .setTitle("🚀  Auto Joiner — Shop")
+        .setDescription(
+          "Purchase **Auto Joiner** or top up your balance.\n\n" +
+          "🛒 **Buy** — Select a duration and purchase with your balance\n" +
+          "💳 **Top Up** — Add funds to your account via crypto\n" +
+          "💰 **Balance** — Check your current balance"
+        )
+        .setColor(BRAND_COLOR)
+        .setFooter({ text: FOOTER_TEXT })
+        .setTimestamp();
+
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId("btn_buy").setLabel("🛒 Buy Auto Joiner").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId("btn_pay").setLabel("💳 Top Up").setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId("btn_balance").setLabel("💰 Balance").setStyle(ButtonStyle.Secondary)
+      );
+
+      await channel.send({ embeds: [embed], components: [row] });
+      console.log("✅ Auto Joiner shop UI posted to channel", AUTO_JOINER_SHOP_CHANNEL_ID);
+    } catch (err) {
+      console.error("❌ Failed to post Auto Joiner shop UI:", err.message);
+    }
+  }
+
+  setTimeout(() => postAutoJoinerShopUI(), 6000);
+
   // ===== AUTO JOINER PROMO — каждое воскресенье в 00:30 по Астане (UTC+5) =====
   const PROMO_CHANNEL_ID = "1431170415170031709";
   let lastPromoMessageId = null;
@@ -458,9 +500,6 @@ client.once("ready", async () => {
   }
 
   schedulePromo();
-
-  // ===== SHOP CHANNEL SETUP — отправляем/обновляем embed с кнопками в канал магазина =====
-  setTimeout(() => setupShopChannel(), 6000);
 });
 
 client.on("guildCreate", (guild) => {
@@ -542,59 +581,7 @@ async function updateStockChannel() {
   }
 }
 
-// ===== SHOP CHANNEL: отправить/обновить постоянный embed с кнопками =====
-async function setupShopChannel() {
-  try {
-    const channel = await client.channels.fetch(SHOP_CHANNEL_ID).catch(() => null);
-    if (!channel) {
-      console.warn(`⚠️ Shop channel ${SHOP_CHANNEL_ID} not found`);
-      return;
-    }
-
-    // Получаем stock для embed
-    const stock1 = await getAvailableKeyCount("auto_joiner_1").catch(() => "?");
-    const stock2 = await getAvailableKeyCount("auto_joiner_2").catch(() => "?");
-    const stock3 = await getAvailableKeyCount("auto_joiner_3").catch(() => "?");
-
-    const embed = new EmbedBuilder()
-      .setTitle("🚀  Auto Joiner — Shop")
-      .setDescription(
-        "Купи ключ Auto Joiner прямо здесь!\n\n" +
-        `**📦 В наличии:**\n` +
-        `• 1 день — \`${stock1}\` ключей\n` +
-        `• 2 дня  — \`${stock2}\` ключей\n` +
-        `• 3 дня  — \`${stock3}\` ключей\n\n` +
-        "Нажми кнопку ниже для покупки или пополнения баланса."
-      )
-      .setColor(BRAND_COLOR)
-      .setFooter({ text: FOOTER_TEXT })
-      .setTimestamp();
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId("btn_buy").setLabel("🚀 Купить").setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId("btn_pay").setLabel("💳 Пополнить баланс").setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId("btn_balance").setLabel("💰 Баланс").setStyle(ButtonStyle.Secondary)
-    );
-
-    // Ищем последнее сообщение бота в канале и редактируем, иначе отправляем новое
-    const messages = await channel.messages.fetch({ limit: 20 }).catch(() => null);
-    const existing = messages
-      ? messages.find(m => m.author.id === client.user.id && m.components.length > 0)
-      : null;
-
-    if (existing) {
-      await existing.edit({ embeds: [embed], components: [row] });
-      console.log(`✅ Shop channel embed updated`);
-    } else {
-      await channel.send({ embeds: [embed], components: [row] });
-      console.log(`✅ Shop channel embed sent`);
-    }
-  } catch (err) {
-    console.error("❌ setupShopChannel error:", err.message);
-  }
-}
-
-
+// ===== WELCOME MESSAGE FOR NEW TICKET CHANNELS =====
 client.on("channelCreate", async (channel) => {
   try {
     if (!channel.isTextBased() || !channel.guild) return;
@@ -670,10 +657,10 @@ async function isAllowedChannel(interaction) {
     interaction.isStringSelectMenu() ||
     interaction.isModalSubmit()
   ) return true;
+  // Auto Joiner shop channel — always allow (users interact via buttons only)
+  if (interaction.channelId === AUTO_JOINER_SHOP_CHANNEL_ID) return true;
   const channelName = interaction.channel?.name?.toLowerCase() ?? "";
   if (channelName.includes("ticket")) return true;
-  // Shop channel — разрешаем
-  if (interaction.channelId === SHOP_CHANNEL_ID) return true;
   // Staff can use slash commands anywhere
   const tier = await getAccessTier(interaction.user.id);
   return tier !== null;
@@ -3797,9 +3784,6 @@ client.on("interactionCreate", async (interaction) => {
         const newBalance = await getBalance(interaction.user.id);
         const stock      = await getAvailableKeyCount(storageId);
 
-        // Обновляем shop-channel embed (сток изменился)
-        setupShopChannel().catch(() => {});
-
         await interaction.editReply({
           embeds: [
             new EmbedBuilder()
@@ -3831,43 +3815,44 @@ client.on("interactionCreate", async (interaction) => {
             { name: `${product.name.replace(/\s+/g, "_")}_Key_${Date.now()}.txt` }
           );
 
-          const keyEmbed = new EmbedBuilder()
-            .setTitle("🔑  Auto Joiner Key")
-            .addFields(
-              { name: "License Key", value: `\`${key.key_value}\``, inline: false },
-              { name: "Duration",    value: `\`${tier.days}d\``,    inline: true  },
-              { name: "Price",       value: `\`$${tier.price}\``,   inline: true  }
-            )
-            .setColor(SUCCESS_COLOR)
-            .setFooter({ text: FOOTER_TEXT });
+          await interaction.user.send({
+            embeds: [
+              new EmbedBuilder()
+                .setTitle("🔑  Auto Joiner Key")
+                .addFields(
+                  { name: "License Key", value: `\`${key.key_value}\``, inline: false },
+                  { name: "Duration",    value: `\`${tier.days}d\``,    inline: true  },
+                  { name: "Price",       value: `\`$${tier.price}\``,   inline: true  }
+                )
+                .setColor(SUCCESS_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+            ],
+            files: [keyAttachment]
+          });
+          console.log(`📬 Key sent to ${interaction.user.tag}`);
 
-          // Сначала пробуем отправить в shop-канал (виден только боту + упоминание)
-          let sentToChannel = false;
+          // ── Notify shop channel about the purchase ──
           try {
-            const shopChannel = await client.channels.fetch(SHOP_CHANNEL_ID).catch(() => null);
+            const shopChannel = await client.channels.fetch(AUTO_JOINER_SHOP_CHANNEL_ID).catch(() => null);
             if (shopChannel) {
-              await shopChannel.send({
-                content: `<@${interaction.user.id}>`,
-                embeds: [keyEmbed],
-                files: [keyAttachment]
-              });
-              sentToChannel = true;
-              console.log(`📬 Key sent to shop channel for ${interaction.user.tag}`);
+              const saleEmbed = new EmbedBuilder()
+                .setTitle("🛒  New Purchase")
+                .addFields(
+                  { name: "👤 Buyer",    value: `<@${interaction.user.id}>`,              inline: true },
+                  { name: "📦 Product",  value: `Auto Joiner — ${tier.days}d`,            inline: true },
+                  { name: "💵 Price",    value: `\`$${tier.price}\``,                     inline: true },
+                  { name: "📦 Stock",    value: `\`${stock}\` keys remaining`,            inline: true }
+                )
+                .setColor(SUCCESS_COLOR)
+                .setFooter({ text: FOOTER_TEXT })
+                .setTimestamp();
+              await shopChannel.send({ embeds: [saleEmbed] });
             }
-          } catch (chanErr) {
-            console.log(`⚠️ Could not send key to shop channel:`, chanErr.message);
-          }
-
-          // Fallback: если канал недоступен — шлём в DM
-          if (!sentToChannel) {
-            await interaction.user.send({
-              embeds: [keyEmbed],
-              files: [keyAttachment]
-            });
-            console.log(`📬 Key sent via DM to ${interaction.user.tag} (channel fallback)`);
+          } catch (chErr) {
+            console.log(`⚠️ Could not notify shop channel:`, chErr.message);
           }
         } catch (dmErr) {
-          console.log(`⚠️ Could not send key to ${interaction.user.tag}:`, dmErr.message);
+          console.log(`⚠️ Could not DM key to ${interaction.user.tag}:`, dmErr.message);
         }
 
       } catch (err) {
