@@ -673,7 +673,7 @@ async function isAllowedChannel(interaction) {
 function getAvailableProducts(guildId) {
   if (guildId === SECOND_GUILD_ID) {
     return Object.fromEntries(
-      Object.entries(PRODUCTS).filter(([id]) => id === "auto_joiner")
+      Object.entries(PRODUCTS).filter(([id]) => id === "auto_joiner" || id === "lagger")
     );
   }
   if (guildId === RESTRICTED_GUILD_ID) {
@@ -2949,148 +2949,19 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    // ── Buy Lagger (1 day) ──
+    // ── Buy Lagger — открывает то же меню оплаты, что и btn_buy ──
     if (interaction.customId === "btn_buy_lagger") {
-      await interaction.deferReply({ flags: 64 });
+      const embed = new EmbedBuilder()
+        .setTitle("⚡  Buy Lagger")
+        .setDescription("Choose how you want to pay:")
+        .setColor(BRAND_COLOR)
+        .setFooter({ text: FOOTER_TEXT });
 
-      try {
-        const product   = PRODUCTS["lagger"];
-        const tier      = product.tiers[0]; // only 1 day
-        const storageId = resolveStorageId("lagger", tier.days);
-
-        const balance = await getBalance(interaction.user.id);
-        if (balance < tier.price) {
-          return interaction.editReply({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("💰  Insufficient Balance")
-                .setDescription(
-                  `You need **$${tier.price.toFixed(2)}** but only have **$${balance.toFixed(2)}**.\n` +
-                  `Missing: **$${(tier.price - balance).toFixed(2)}**\n\n` +
-                  `Use \`/pay\` to top up your balance.`
-                )
-                .setColor(ERROR_COLOR)
-                .setFooter({ text: FOOTER_TEXT })
-            ]
-          });
-        }
-
-        const key = await getRandomAvailableKey(storageId);
-        if (!key) {
-          return interaction.editReply({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("📦  Out of Stock")
-                .setDescription(`**Lagger 1d** is out of stock. Check back later.`)
-                .setColor(WARNING_COLOR)
-                .setFooter({ text: FOOTER_TEXT })
-            ]
-          });
-        }
-
-        const deducted = await deductBalance(interaction.user.id, tier.price);
-        if (!deducted) {
-          const bal = await getBalance(interaction.user.id);
-          return interaction.editReply({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("❌  Insufficient Balance")
-                .setDescription(`You need **$${tier.price}** but have **$${bal.toFixed(2)}**. Use \`/pay\` to top up.`)
-                .setColor(ERROR_COLOR)
-                .setFooter({ text: FOOTER_TEXT })
-            ]
-          });
-        }
-
-        await markKeyAsUsed(key.id, interaction.user.id);
-
-        const newBalance = await getBalance(interaction.user.id);
-        const stock      = await getAvailableKeyCount(storageId);
-
-        await interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("✅  Purchase Successful!")
-              .setDescription(`**Lagger 1d** — key sent to your DMs.`)
-              .addFields(
-                { name: "Price",       value: `\`$${tier.price}\``,            inline: true },
-                { name: "New Balance", value: `\`$${newBalance.toFixed(2)}\``, inline: true }
-              )
-              .setColor(SUCCESS_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        });
-
-        try {
-          const keyFileContent =
-            `${product.name} License Key\n` +
-            `========================\n\n` +
-            `Product: ${product.name}\n` +
-            `Duration: ${tier.days} day\n` +
-            `Price: $${tier.price}\n` +
-            `Purchase Date: ${new Date().toISOString()}\n\n` +
-            `License Key:\n${key.key_value}\n\n` +
-            `========================\n` +
-            `Keep this key safe and secure.\n`;
-
-          const keyAttachment = new AttachmentBuilder(
-            Buffer.from(keyFileContent, "utf-8"),
-            { name: `${product.name.replace(/\s+/g, "_")}_Key_${Date.now()}.txt` }
-          );
-
-          await interaction.user.send({
-            embeds: [
-              new EmbedBuilder()
-                .setTitle("⚡  Lagger Key")
-                .addFields(
-                  { name: "License Key", value: `\`${key.key_value}\``, inline: false },
-                  { name: "Duration",    value: `\`1d\``,                inline: true  },
-                  { name: "Price",       value: `\`$${tier.price}\``,   inline: true  }
-                )
-                .setColor(SUCCESS_COLOR)
-                .setFooter({ text: FOOTER_TEXT })
-            ],
-            files: [keyAttachment]
-          });
-          console.log(`📬 Lagger key sent to ${interaction.user.tag}`);
-
-          try {
-            const shopChannel = await client.channels.fetch(AUTO_JOINER_SHOP_CHANNEL_ID).catch(() => null);
-            if (shopChannel) {
-              const saleEmbed = new EmbedBuilder()
-                .setTitle("🛒  New Purchase")
-                .addFields(
-                  { name: "👤 Buyer",   value: `<@${interaction.user.id}>`, inline: true },
-                  { name: "📦 Product", value: `Lagger — 1d`,               inline: true },
-                  { name: "💵 Price",   value: `\`$${tier.price}\``,        inline: true },
-                  { name: "📦 Stock",   value: `\`${stock}\` keys remaining`, inline: true }
-                )
-                .setColor(SUCCESS_COLOR)
-                .setFooter({ text: FOOTER_TEXT })
-                .setTimestamp();
-              await shopChannel.send({ embeds: [saleEmbed] });
-            }
-          } catch (chErr) {
-            console.log(`⚠️ Could not notify shop channel:`, chErr.message);
-          }
-        } catch (dmErr) {
-          console.log(`⚠️ Could not DM Lagger key to ${interaction.user.tag}:`, dmErr.message);
-        }
-
-      } catch (err) {
-        console.error("❌ Buy Lagger handler error:", err);
-        await interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("❌  Unexpected Error")
-              .setDescription(`\`${err.message}\`\nPlease contact support.`)
-              .setColor(ERROR_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        }).catch(() => {});
-      }
-
-      return;
+      return interaction.reply({
+        embeds: [embed],
+        components: [buildPaymentMethodMenu()],
+        ephemeral: true
+      });
     }
 
     // ── Notifier: open hours input modal ──
