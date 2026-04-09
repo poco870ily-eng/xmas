@@ -1403,7 +1403,7 @@ const FUNPAY_RESELLERS = [
 ];
 
 const FUNPAY_RESELLERS_LAGGER = [
-  { name: "Reseller 1", url: "https://funpay.com/lots/offer?id=55896359" },
+  { name: "Reseller 1", url: "https://funpay.com/lots/offer?id=67290927" },
   { name: "Reseller 2", url: "https://funpay.com/lots/offer?id=58774987" }
 ];
 
