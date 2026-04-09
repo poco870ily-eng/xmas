@@ -1398,8 +1398,13 @@ const CURRENCIES = {
 
 // ===== FUNPAY RESELLERS =====
 const FUNPAY_RESELLERS = [
-  { name: "ilyasika", url: "https://funpay.com/lots/offer?id=55896359" },
-  { name: "ver0n",    url: "https://funpay.com/lots/offer?id=55551861" }
+  { name: "Reseller 1", url: "https://funpay.com/lots/offer?id=55896359" },
+  { name: "Reseller 2", url: "https://funpay.com/lots/offer?id=55551861" }
+];
+
+const FUNPAY_RESELLERS_LAGGER = [
+  { name: "Reseller 1", url: "https://funpay.com/lots/offer?id=55896359" },
+  { name: "Reseller 2", url: "https://funpay.com/lots/offer?id=58774987" }
 ];
 
 // ===== CREATE PAYMENT =====
@@ -1533,8 +1538,8 @@ async function buildShopEmbed(guildId) {
   return embed;
 }
 
-function buildFunPayEmbed() {
-  const resellersText = FUNPAY_RESELLERS
+function buildFunPayEmbed(resellers = FUNPAY_RESELLERS) {
+  const resellersText = resellers
     .map(r => `**${r.name}** — ${r.url}`)
     .join("\n");
 
@@ -3988,7 +3993,7 @@ client.on("interactionCreate", async (interaction) => {
               .setStyle(ButtonStyle.Secondary)
           );
           return await interaction.editReply({
-            embeds: [buildFunPayEmbed()],
+            embeds: [buildFunPayEmbed(preselectedProduct === "lagger" ? FUNPAY_RESELLERS_LAGGER : FUNPAY_RESELLERS)],
             components: [backButton]
           });
         }
