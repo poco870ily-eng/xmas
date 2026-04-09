@@ -1382,7 +1382,7 @@ const PRODUCTS = {
     description: "Lagger tool — 1 day access",
     isAccess:    false,
     tiers: [
-      { days: 1, price: 20, originalPrice: 30 }
+      { days: 1, price: 15 }
     ]
   }
 };
