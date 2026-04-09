@@ -1637,7 +1637,7 @@ const STATUS_CONFIG = {
 };
 
 // ===== UI BUILDERS =====
-function buildPaymentMethodMenu() {
+function buildPaymentMethodMenu(customId = "select_payment_method") {
   const options = [
     new StringSelectMenuOptionBuilder()
       .setLabel("Pay with Balance")
@@ -1658,7 +1658,7 @@ function buildPaymentMethodMenu() {
 
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
-      .setCustomId("select_payment_method")
+      .setCustomId(customId)
       .setPlaceholder("Choose payment method...")
       .addOptions(options)
   );
@@ -2937,14 +2937,14 @@ client.on("interactionCreate", async (interaction) => {
 
     if (interaction.customId === "btn_buy") {
       const embed = new EmbedBuilder()
-        .setTitle("🛒  Buy")
+        .setTitle("🛒  Buy Auto Joiner")
         .setDescription("Choose how you want to pay:")
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT });
 
       return interaction.reply({
         embeds: [embed],
-        components: [buildPaymentMethodMenu()],
+        components: [buildPaymentMethodMenu("select_payment_method:auto_joiner")],
         ephemeral: true
       });
     }
@@ -2959,7 +2959,7 @@ client.on("interactionCreate", async (interaction) => {
 
       return interaction.reply({
         embeds: [embed],
-        components: [buildPaymentMethodMenu()],
+        components: [buildPaymentMethodMenu("select_payment_method:lagger")],
         ephemeral: true
       });
     }
@@ -3860,26 +3860,7 @@ client.on("interactionCreate", async (interaction) => {
           });
           console.log(`📬 Key sent to ${interaction.user.tag}`);
 
-          // ── Notify shop channel about the purchase ──
-          try {
-            const shopChannel = await client.channels.fetch(AUTO_JOINER_SHOP_CHANNEL_ID).catch(() => null);
-            if (shopChannel) {
-              const saleEmbed = new EmbedBuilder()
-                .setTitle("🛒  New Purchase")
-                .addFields(
-                  { name: "👤 Buyer",    value: `<@${interaction.user.id}>`,              inline: true },
-                  { name: "📦 Product",  value: `Auto Joiner — ${tier.days}d`,            inline: true },
-                  { name: "💵 Price",    value: `\`$${tier.price}\``,                     inline: true },
-                  { name: "📦 Stock",    value: `\`${stock}\` keys remaining`,            inline: true }
-                )
-                .setColor(SUCCESS_COLOR)
-                .setFooter({ text: FOOTER_TEXT })
-                .setTimestamp();
-              await shopChannel.send({ embeds: [saleEmbed] });
-            }
-          } catch (chErr) {
-            console.log(`⚠️ Could not notify shop channel:`, chErr.message);
-          }
+
         } catch (dmErr) {
           console.log(`⚠️ Could not DM key to ${interaction.user.tag}:`, dmErr.message);
         }
@@ -3987,15 +3968,22 @@ client.on("interactionCreate", async (interaction) => {
 
   // ──────────── SELECT MENUS ────────────
   if (interaction.isStringSelectMenu()) {
-    if (interaction.customId === "select_payment_method") {
+    if (interaction.customId.startsWith("select_payment_method")) {
       const method = interaction.values[0];
+      // Parse pre-selected product from customId (e.g. "select_payment_method:auto_joiner")
+      const preselectedProduct = interaction.customId.includes(":")
+        ? interaction.customId.split(":")[1]
+        : null;
 
       try {
         if (method === "funpay") {
           await interaction.deferUpdate();
+          const backCustomId = preselectedProduct
+            ? (preselectedProduct === "lagger" ? "btn_buy_lagger" : "btn_buy")
+            : "btn_buy";
           const backButton = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
-              .setCustomId("btn_buy")
+              .setCustomId(backCustomId)
               .setLabel("◀️ Back to Payment Methods")
               .setStyle(ButtonStyle.Secondary)
           );
@@ -4058,6 +4046,31 @@ client.on("interactionCreate", async (interaction) => {
             );
 
             return await interaction.editReply({ embeds: [embed], components: [buyRow] });
+          }
+
+          // ── If product was pre-selected (from btn_buy / btn_buy_lagger), skip product menu ──
+          if (preselectedProduct && PRODUCTS[preselectedProduct]) {
+            const product = PRODUCTS[preselectedProduct];
+            const tierInfo = await Promise.all(
+              product.tiers.map(async t => {
+                const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
+                const orig  = t.originalPrice ? ` ~~$${t.originalPrice}~~` : "";
+                return `**${t.days} day${t.days > 1 ? "s" : ""}** —${orig} **$${t.price}** 🔥  📦 \`${stock}\` in stock`;
+              })
+            );
+
+            const embed = new EmbedBuilder()
+              .setTitle(`${product.emoji}  ${product.name}`)
+              .setDescription(
+                `${product.description}\n\n` +
+                `**💰 Pricing (Special Discount!):**\n${tierInfo.join("\n")}`
+              )
+              .setColor(BRAND_COLOR)
+              .setFooter({ text: "Select a tier below to purchase • " + FOOTER_TEXT })
+              .setTimestamp();
+
+            const row = buildTierButtons(preselectedProduct);
+            return await interaction.editReply({ embeds: [embed], components: row ? [row] : [] });
           }
 
           const embed = await buildShopEmbed(interaction.guildId);
