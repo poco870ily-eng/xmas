@@ -1361,9 +1361,9 @@ const PRODUCTS = {
     description: "Automatically join rich servers",
     isAccess:    false,
     tiers: [
-      { days: 1, price: 20, originalPrice: 30 },
-      { days: 2, price: 40, originalPrice: 50 },
-      { days: 3, price: 60, originalPrice: 70 }
+      { days: 1, price: 15, originalPrice: 20 },
+      { days: 2, price: 25, originalPrice: 50 },
+      { days: 3, price: 35, originalPrice: 70 }
     ]
   },
   notifier: {
