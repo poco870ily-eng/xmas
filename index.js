@@ -1379,10 +1379,10 @@ const PRODUCTS = {
     id:          "lagger",
     name:        "Lagger",
     emoji:       "⚡",
-    description: "Lagger tool — 1 day access",
+    description: "Lagger tool — Lifetime access",
     isAccess:    false,
     tiers: [
-      { days: 1, price: 15 }
+      { days: 0, label: "Lifetime", price: 10 }
     ]
   }
 };
@@ -1514,7 +1514,7 @@ async function buildShopEmbed(guildId) {
       const stockStr = taken >= MAX_NOTIFIER_STOCK ? `🔴 SOLD OUT` : `${emoji} ${taken}/${MAX_NOTIFIER_STOCK} slots taken`;
       const priceInfo = product.pricePerHour
         ? `$${product.pricePerHour} / hour`
-        : product.tiers.map(t => `${t.days} day${t.days > 1 ? "s" : ""} — $${t.price}`).join(" · ");
+        : product.tiers.map(t => `${t.label ?? (t.days + " day" + (t.days > 1 ? "s" : ""))} — $${t.price}`).join(" · ");
       embed.addFields({
         name:  `${product.emoji} ${product.name} — ${stockStr}`,
         value: priceInfo,
@@ -1524,7 +1524,7 @@ async function buildShopEmbed(guildId) {
       const tierInfo = await Promise.all(
         product.tiers.map(async t => {
           const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
-          return `${t.days} day${t.days > 1 ? "s" : ""} — **$${t.price}** (${stock} in stock)`;
+          return `${t.label ?? (t.days + " day" + (t.days > 1 ? "s" : ""))} — **$${t.price}** (${stock} in stock)`;
         })
       );
       embed.addFields({
@@ -1710,7 +1710,7 @@ function buildTierButtons(productId) {
   const buttons = product.tiers.map(tier =>
     new ButtonBuilder()
       .setCustomId(`buy_${productId}_${tier.days}`)
-      .setLabel(`${tier.days} Day${tier.days > 1 ? "s" : ""} - $${tier.price}`)
+      .setLabel(`${tier.label ?? (tier.days + " Day" + (tier.days > 1 ? "s" : ""))} - $${tier.price}`)
       .setStyle(ButtonStyle.Success)
       .setEmoji("💳")
   );
@@ -4060,7 +4060,7 @@ client.on("interactionCreate", async (interaction) => {
               product.tiers.map(async t => {
                 const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
                 const orig  = t.originalPrice ? ` ~~$${t.originalPrice}~~` : "";
-                return `**${t.days} day${t.days > 1 ? "s" : ""}** —${orig} **$${t.price}** 🔥  📦 \`${stock}\` in stock`;
+                return `**${t.label ?? (t.days + " day" + (t.days > 1 ? "s" : ""))}** —${orig} **$${t.price}** 🔥  📦 \`${stock}\` in stock`;
               })
             );
 
@@ -4168,7 +4168,7 @@ client.on("interactionCreate", async (interaction) => {
         product.tiers.map(async t => {
           const stock = await getAvailableKeyCount(resolveStorageId(product.id, t.days));
           const orig  = t.originalPrice ? ` ~~$${t.originalPrice}~~` : "";
-          return `**${t.days} day${t.days > 1 ? "s" : ""}** —${orig} **$${t.price}** 🔥  📦 \`${stock}\` in stock`;
+          return `**${t.label ?? (t.days + " day" + (t.days > 1 ? "s" : ""))}** —${orig} **$${t.price}** 🔥  📦 \`${stock}\` in stock`;
         })
       );
 
