@@ -426,16 +426,17 @@ client.once("ready", async () => {
 
   setTimeout(() => postAutoJoinerShopUI(), 6000);
 
-  // ===== AUTO JOINER PROMO — каждое воскресенье в 00:30 по Астане (UTC+5) =====
-  const PROMO_CHANNEL_ID = "1431170415170031709";
+  // ===== AUTO JOINER PROMO — каждый день в 11:30 и 00:00 по Астане (UTC+5) =====
+  // Отправляется в канал с панелью покупок (AUTO_JOINER_SHOP_CHANNEL_ID).
+  // Панель покупок (кнопки) НЕ удаляется — удаляется только предыдущее promo-сообщение.
   let lastPromoMessageId = null;
 
   async function sendPromoMessage() {
     try {
-      const channel = await client.channels.fetch(PROMO_CHANNEL_ID);
-      if (!channel) return console.warn("⚠️ Promo channel not found");
+      const channel = await client.channels.fetch(AUTO_JOINER_SHOP_CHANNEL_ID);
+      if (!channel) return console.warn("⚠️ Promo channel (shop) not found");
 
-      // Удаляем предыдущее сообщение
+      // Удаляем только предыдущее promo-сообщение, панель покупок НЕ трогаем
       if (lastPromoMessageId) {
         try {
           const old = await channel.messages.fetch(lastPromoMessageId);
@@ -460,45 +461,46 @@ client.once("ready", async () => {
     }
   }
 
-  // Вычисляет миллисекунды до следующего воскресенья в 00:30 по Астане (UTC+5)
-  function msUntilNextSundayAstana() {
+  // Возвращает миллисекунды до ближайшего из двух времён (11:30 или 00:00) по Астане (UTC+5)
+  function msUntilNextPromoAstana() {
     const ASTANA_OFFSET_MS = 5 * 60 * 60 * 1000; // UTC+5
     const now = Date.now();
     const nowAstana = new Date(now + ASTANA_OFFSET_MS);
 
-    // Целевое время: воскресенье (0), 11:40:00
-    const TARGET_HOUR   = 11;
-    const TARGET_MINUTE = 40;
+    // Два целевых времени в минутах от начала суток
+    const TARGETS = [
+      { hour: 0,  minute: 0  }, // 00:00
+      { hour: 23, minute: 30 }  // 23:30
+    ];
 
-    // Находим ближайшее воскресенье 00:30 Астана, которое ещё не наступило
-    const dayOfWeek = nowAstana.getUTCDay(); // 0=Вс, 1=Пн, ..., 6=Сб
-    let daysUntilSunday = (7 - dayOfWeek) % 7; // дней до следующего воскресенья
+    const currentMinutes = nowAstana.getUTCHours() * 60 + nowAstana.getUTCMinutes();
 
-    // Проверяем: если сегодня воскресенье, но 00:30 уже прошло — берём следующую неделю
-    if (daysUntilSunday === 0) {
-      const currentMinutes = nowAstana.getUTCHours() * 60 + nowAstana.getUTCMinutes();
-      const targetMinutes  = TARGET_HOUR * 60 + TARGET_MINUTE;
-      if (currentMinutes >= targetMinutes) daysUntilSunday = 7;
+    // Ищем ближайшее время сегодня, которое ещё не наступило
+    let minDelay = Infinity;
+    for (const t of TARGETS) {
+      const targetMinutes = t.hour * 60 + t.minute;
+      let daysOffset = 0;
+      if (targetMinutes <= currentMinutes) {
+        daysOffset = 1; // уже прошло сегодня — берём завтра
+      }
+      const targetAstana = new Date(nowAstana);
+      targetAstana.setUTCDate(nowAstana.getUTCDate() + daysOffset);
+      targetAstana.setUTCHours(t.hour, t.minute, 0, 0);
+      const targetUTC = targetAstana.getTime() - ASTANA_OFFSET_MS;
+      const delay = targetUTC - now;
+      if (delay > 0 && delay < minDelay) minDelay = delay;
     }
 
-    // Строим точную дату следующего воскресенья 00:30 Астана = UTC
-    const nextSundayAstana = new Date(nowAstana);
-    nextSundayAstana.setUTCDate(nowAstana.getUTCDate() + daysUntilSunday);
-    nextSundayAstana.setUTCHours(TARGET_HOUR, TARGET_MINUTE, 0, 0);
-
-    const nextSundayUTC = nextSundayAstana.getTime() - ASTANA_OFFSET_MS;
-    const delay = nextSundayUTC - now;
-
-    console.log(`⏰ Следующая promo-рассылка: ${new Date(nextSundayUTC).toISOString()} UTC (через ${Math.round(delay / 3600000 * 10) / 10} ч.)`);
-    return delay;
+    console.log(`⏰ Следующая promo-рассылка через ${Math.round(minDelay / 60000)} мин.`);
+    return minDelay;
   }
 
-  // Планировщик: запускает promo и перепланирует на следующую неделю
+  // Планировщик: запускает promo и перепланирует на следующее время
   function schedulePromo() {
-    const delay = msUntilNextSundayAstana();
+    const delay = msUntilNextPromoAstana();
     setTimeout(() => {
       sendPromoMessage();
-      schedulePromo(); // перепланировать на следующую неделю
+      schedulePromo(); // перепланировать на следующий раз
     }, delay);
   }
 
