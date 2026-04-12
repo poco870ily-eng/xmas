@@ -1773,9 +1773,9 @@ function buildKeyListButtons(page, totalPages, storageId) {
 /**
  * Modal shown to buyer when they choose "Pay with Brainrots"
  */
-function buildBrainrotOfferModal() {
+function buildBrainrotOfferModal(productId = "auto_joiner") {
   const modal = new ModalBuilder()
-    .setCustomId("modal_brainrot_offer")
+    .setCustomId(`modal_brainrot_offer:${productId}`)
     .setTitle("🐸 Offer Brainrots");
 
   const brainrotInput = new TextInputBuilder()
@@ -4003,7 +4003,7 @@ client.on("interactionCreate", async (interaction) => {
         // ── NEW: Brainrot payment method ──
         if (method === "brainrot") {
           // Show the modal immediately (cannot call update AND showModal)
-          return interaction.showModal(buildBrainrotOfferModal());
+          return interaction.showModal(buildBrainrotOfferModal(preselectedProduct || "auto_joiner"));
         }
 
         if (method === "balance") {
@@ -4430,7 +4430,7 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     // ===== MODAL: Brainrot offer submission (from buyer) =====
-    if (interaction.customId === "modal_brainrot_offer") {
+    if (interaction.customId.startsWith("modal_brainrot_offer")) {
       await interaction.deferReply({ flags: 64 });
 
       const brainrotInfo = interaction.fields.getTextInputValue("brainrot_info").trim();
@@ -4450,10 +4450,19 @@ client.on("interactionCreate", async (interaction) => {
 
       const offerId = generateOfferId();
 
-      // Determine what product the buyer wants based on their guild
+      // Determine what product the buyer wants — from customId (e.g. "modal_brainrot_offer:lagger")
+      const brainrotProductId = interaction.customId.includes(":")
+        ? interaction.customId.split(":")[1]
+        : null;
+
       let wantedProduct = "любой товар";
-      if (interaction.guildId === RESTRICTED_GUILD_ID)  wantedProduct = "🔔 Notifier";
-      else if (interaction.guildId === SECOND_GUILD_ID) wantedProduct = "🤖 Auto Joiner";
+      if (interaction.guildId === RESTRICTED_GUILD_ID) {
+        wantedProduct = "🔔 Notifier";
+      } else if (brainrotProductId === "lagger") {
+        wantedProduct = "⚡ Lagger";
+      } else if (brainrotProductId === "auto_joiner" || interaction.guildId === SECOND_GUILD_ID) {
+        wantedProduct = "🤖 Auto Joiner";
+      }
 
       const channelLink = interaction.guildId
         ? `https://discord.com/channels/${interaction.guildId}/${interaction.channelId}`
