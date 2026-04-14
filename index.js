@@ -2981,18 +2981,7 @@ client.on("interactionCreate", async (interaction) => {
       const offerId = interaction.customId.slice("brainrot_accept_".length);
       const offer   = brainrotOffers.get(offerId);
 
-      if (!offer) {
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️  Предложение истекло")
-              .setDescription("Это предложение больше не существует или уже было обработано.")
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ],
-          ephemeral: true
-        });
-      }
+      if (!offer) return interaction.deferUpdate();
 
       // Mark this receiver as the one who accepted
       offer.receiverId = interaction.user.id;
@@ -3074,18 +3063,7 @@ client.on("interactionCreate", async (interaction) => {
       const offerId = interaction.customId.slice("brainrot_decline_".length);
       const offer   = brainrotOffers.get(offerId);
 
-      if (!offer) {
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️  Предложение истекло")
-              .setDescription("Это предложение больше не существует.")
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ],
-          ephemeral: true
-        });
-      }
+      if (!offer) return interaction.deferUpdate();
 
       // Show modal to enter optional comment for the buyer
       return interaction.showModal(buildBrainrotDeclineCommentModal(offerId));
@@ -3096,18 +3074,7 @@ client.on("interactionCreate", async (interaction) => {
       const offerId = interaction.customId.slice("brainrot_buyer_agree_".length);
       const offer   = brainrotOffers.get(offerId);
 
-      if (!offer) {
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️  Offer Expired")
-              .setDescription("This offer no longer exists.")
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ],
-          ephemeral: true
-        });
-      }
+      if (!offer) return interaction.deferUpdate();
 
       // Make sure it's the actual buyer responding
       if (interaction.user.id !== offer.buyerId) {
@@ -3205,18 +3172,7 @@ client.on("interactionCreate", async (interaction) => {
       const offerId = interaction.customId.slice("brainrot_buyer_decline_".length);
       const offer   = brainrotOffers.get(offerId);
 
-      if (!offer) {
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️  Offer Expired")
-              .setDescription("This offer no longer exists.")
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ],
-          ephemeral: true
-        });
-      }
+      if (!offer) return interaction.deferUpdate();
 
       if (interaction.user.id !== offer.buyerId) {
         return interaction.reply({
@@ -3276,18 +3232,7 @@ client.on("interactionCreate", async (interaction) => {
       const offerId = interaction.customId.slice("brainrot_gotit_".length);
       const offer   = brainrotOffers.get(offerId);
 
-      if (!offer) {
-        return interaction.update({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️  Предложение истекло")
-              .setDescription("Это предложение уже не существует.")
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ],
-          components: []
-        });
-      }
+      if (!offer) return interaction.deferUpdate();
 
       if (interaction.user.id !== offer.receiverId) {
         return interaction.reply({
@@ -3343,18 +3288,7 @@ client.on("interactionCreate", async (interaction) => {
       const offerId = interaction.customId.slice("brainrot_notgot_".length);
       const offer   = brainrotOffers.get(offerId);
 
-      if (!offer) {
-        return interaction.update({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️  Предложение истекло")
-              .setDescription("Это предложение уже не существует.")
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ],
-          components: []
-        });
-      }
+      if (!offer) return interaction.deferUpdate();
 
       if (interaction.user.id !== offer.receiverId) {
         return interaction.reply({
@@ -3418,18 +3352,7 @@ client.on("interactionCreate", async (interaction) => {
       const days           = parseInt(withoutPrefix.substring(lastUnderscore + 1));
       const offer          = brainrotOffers.get(offerId);
 
-      if (!offer) {
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️  Предложение завершено")
-              .setDescription("Это предложение уже выполнено или больше не существует.")
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ],
-          components: []
-        });
-      }
+      if (!offer) return;
 
       if (interaction.user.id !== offer.receiverId) {
         return interaction.followUp({
@@ -3532,18 +3455,7 @@ client.on("interactionCreate", async (interaction) => {
       const offerId = interaction.customId.slice("brainrot_keydecline_".length);
       const offer   = brainrotOffers.get(offerId);
 
-      if (!offer) {
-        return interaction.update({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️  Предложение истекло")
-              .setDescription("Предложение уже не существует.")
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ],
-          components: []
-        });
-      }
+      if (!offer) return interaction.deferUpdate();
 
       // Show modal to enter optional comment for the buyer
       return interaction.showModal(buildBrainrotDeclineCommentModal(offerId));
@@ -3554,18 +3466,7 @@ client.on("interactionCreate", async (interaction) => {
       const offerId = interaction.customId.slice("brainrot_grant_".length);
       const offer   = brainrotOffers.get(offerId);
 
-      if (!offer) {
-        return interaction.reply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️  Предложение завершено")
-              .setDescription("Это предложение уже выполнено или больше не существует.")
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ],
-          ephemeral: true
-        });
-      }
+      if (!offer) return interaction.deferUpdate();
 
       if (interaction.user.id !== offer.receiverId) {
         return interaction.reply({
@@ -4368,17 +4269,7 @@ client.on("interactionCreate", async (interaction) => {
       const offerId = interaction.customId.slice("modal_brainrot_decline_comment_".length);
       const offer   = brainrotOffers.get(offerId);
 
-      if (!offer) {
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️  Предложение истекло")
-              .setDescription("Это предложение больше не существует или уже было обработано.")
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        });
-      }
+      if (!offer) return interaction.deleteReply();
 
       const comment = interaction.fields.getTextInputValue("decline_comment").trim();
 
@@ -4481,13 +4372,7 @@ client.on("interactionCreate", async (interaction) => {
         offeredLabel:  null
       });
 
-      // Auto-expire offer after 1 hour to avoid stale data
-      setTimeout(() => {
-        if (brainrotOffers.has(offerId)) {
-          brainrotOffers.delete(offerId);
-          console.log(`🗑️ Brainrot offer ${offerId} auto-expired.`);
-        }
-      }, 60 * 60 * 1000);
+      // Offers persist indefinitely — no auto-expiry
 
       // Build Accept/Decline buttons for receivers
       const receiverRow = new ActionRowBuilder().addComponents(
@@ -4551,17 +4436,7 @@ client.on("interactionCreate", async (interaction) => {
       const offerId  = interaction.customId.slice("modal_brainrot_time_".length);
       const offer    = brainrotOffers.get(offerId);
 
-      if (!offer) {
-        return interaction.editReply({
-          embeds: [
-            new EmbedBuilder()
-              .setTitle("⚠️  Предложение истекло")
-              .setDescription("Это предложение больше не существует или уже было обработано.")
-              .setColor(WARNING_COLOR)
-              .setFooter({ text: FOOTER_TEXT })
-          ]
-        });
-      }
+      if (!offer) return interaction.deleteReply();
 
       // Verify this is the receiver who accepted
       if (offer.receiverId !== interaction.user.id) {
