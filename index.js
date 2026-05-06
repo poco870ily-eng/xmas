@@ -283,9 +283,7 @@ const SLASH_COMMANDS = [
         type: ApplicationCommandOptionType.Integer,
         required: false,
         choices: [
-          { name: "1 Day",  value: 1 },
-          { name: "2 Days", value: 2 },
-          { name: "3 Days", value: 3 }
+          { name: "1 Week", value: 7 }
         ]
       },
       {
@@ -323,9 +321,7 @@ const SLASH_COMMANDS = [
         type: ApplicationCommandOptionType.Integer,
         required: false,
         choices: [
-          { name: "1 Day",  value: 1 },
-          { name: "2 Days", value: 2 },
-          { name: "3 Days", value: 3 }
+          { name: "1 Week", value: 7 }
         ]
       },
       {
@@ -402,16 +398,18 @@ client.once("ready", async () => {
         .setTitle("🚀  Auto Joiner — Shop")
         .setDescription(
           "Purchase **Auto Joiner** or top up your balance.\n\n" +
-          "🛒 **Buy** — Select a duration and purchase with your balance\n" +
+          "🤖 **Auto Joiner — 1 Week** — $15\n" +
+          "🛒 **Buy** — Purchase with your balance\n" +
           "💳 **Top Up** — Add funds to your account via crypto\n" +
-          "💰 **Balance** — Check your current balance"
+          "💰 **Balance** — Check your current balance\n\n" +
+          "> ⚠️ Admin abuse is soon."
         )
         .setColor(BRAND_COLOR)
         .setFooter({ text: FOOTER_TEXT })
         .setTimestamp();
 
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("btn_buy").setLabel("🛒 Buy Auto Joiner").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId("btn_buy").setLabel("🤖 BUY AUTO JOINER — 1 WEEK").setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId("btn_buy_lagger").setLabel("⚡ Buy Lagger").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId("btn_pay").setLabel("💳 Top Up").setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId("btn_balance").setLabel("💰 Balance").setStyle(ButtonStyle.Secondary)
@@ -426,9 +424,11 @@ client.once("ready", async () => {
 
   setTimeout(() => postAutoJoinerShopUI(), 6000);
 
-  // ===== AUTO JOINER PROMO — каждый день в 11:30 и 00:00 по Астане (UTC+5) =====
-  // Отправляется в канал с панелью покупок (AUTO_JOINER_SHOP_CHANNEL_ID).
-  // Панель покупок (кнопки) НЕ удаляется — удаляется только предыдущее promo-сообщение.
+  // ===== AUTO JOINER PROMO =====
+  // Every SATURDAY  at 11:30 GMT+5 and SUNDAY at 00:00 GMT+5
+  // Every WEDNESDAY at 5:30 PM EST  and  6:00 PM EST
+  // Posted to AUTO_JOINER_SHOP_CHANNEL_ID.
+  // Shop panel (buttons) is NOT deleted — only the previous promo message is removed.
   let lastPromoMessageId = null;
 
   async function sendPromoMessage() {
@@ -436,13 +436,13 @@ client.once("ready", async () => {
       const channel = await client.channels.fetch(AUTO_JOINER_SHOP_CHANNEL_ID);
       if (!channel) return console.warn("⚠️ Promo channel (shop) not found");
 
-      // Удаляем только предыдущее promo-сообщение, панель покупок НЕ трогаем
+      // Delete only the previous promo message, do NOT touch the shop panel
       if (lastPromoMessageId) {
         try {
           const old = await channel.messages.fetch(lastPromoMessageId);
           await old.delete();
         } catch {
-          // Сообщение уже удалено или недоступно
+          // Message already deleted or unavailable
         }
         lastPromoMessageId = null;
       }
@@ -450,8 +450,18 @@ client.once("ready", async () => {
       const hereMsg = await channel.send({ content: "@here" });
       hereMsg.delete().catch(() => {});
 
+      const promoRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId("btn_buy")
+          .setLabel("🤖 BUY AUTO JOINER — 1 WEEK")
+          .setStyle(ButtonStyle.Success)
+      );
+
       const msg = await channel.send({
-        content: "**Auto Joiner** available — 1 / 2 / 3 day keys in stock. Use `/buy` to purchase."
+        content:
+          "**Auto Joiner** available — **1 Week** keys in stock. Use the button below to purchase.\n" +
+          "> Admin abuse is soon!",
+        components: [promoRow]
       });
 
       lastPromoMessageId = msg.id;
@@ -461,46 +471,56 @@ client.once("ready", async () => {
     }
   }
 
-  // Возвращает миллисекунды до ближайшего из двух времён (11:30 или 00:00) по Астане (UTC+5)
-  function msUntilNextPromoAstana() {
-    const ASTANA_OFFSET_MS = 5 * 60 * 60 * 1000; // UTC+5
+  // Returns milliseconds until the next scheduled promo time.
+  // All targets are stored as UTC equivalents:
+  //   Every SATURDAY  — 11:30 GMT+5  (= Sat 06:30 UTC)
+  //   Every SUNDAY    — 00:00 GMT+5  (= Sat 19:00 UTC)
+  //   Every WEDNESDAY — 5:30 PM EST  (= Wed 22:30 UTC)
+  //                   — 6:00 PM EST  (= Wed 23:00 UTC)
+  function msUntilNextPromoEST() {
     const now = Date.now();
-    const nowAstana = new Date(now + ASTANA_OFFSET_MS);
+    const utcNow = new Date(now);
 
-    // Два целевых времени в минутах от начала суток
-    const TARGETS = [
-      { hour: 0,  minute: 0  }, // 00:00
-      { hour: 23, minute: 30 }  // 23:30
+    // Pure UTC targets: { dayOfWeek (0=Sun … 6=Sat), hour (UTC), minute (UTC) }
+    const TARGETS_UTC = [
+      { dayOfWeek: 6, hour: 19, minute:  0 },  // Sunday 00:00 GMT+5  → Sat 19:00 UTC
+      { dayOfWeek: 6, hour:  6, minute: 30 },  // Saturday 11:30 GMT+5 → Sat 06:30 UTC
+      { dayOfWeek: 3, hour: 22, minute: 30 },  // Wednesday 17:30 EST → Wed 22:30 UTC
+      { dayOfWeek: 3, hour: 23, minute:  0 }   // Wednesday 18:00 EST → Wed 23:00 UTC
     ];
 
-    const currentMinutes = nowAstana.getUTCHours() * 60 + nowAstana.getUTCMinutes();
-
-    // Ищем ближайшее время сегодня, которое ещё не наступило
     let minDelay = Infinity;
-    for (const t of TARGETS) {
-      const targetMinutes = t.hour * 60 + t.minute;
-      let daysOffset = 0;
-      if (targetMinutes <= currentMinutes) {
-        daysOffset = 1; // уже прошло сегодня — берём завтра
+
+    for (const t of TARGETS_UTC) {
+      const candidate = new Date(utcNow);
+      candidate.setUTCSeconds(0, 0);
+      candidate.setUTCHours(t.hour, t.minute, 0, 0);
+
+      const currentDOW = candidate.getUTCDay();
+      let daysAhead = (t.dayOfWeek - currentDOW + 7) % 7;
+      if (
+        daysAhead === 0 &&
+        (candidate.getUTCHours() * 60 + candidate.getUTCMinutes()) <=
+        (utcNow.getUTCHours()   * 60 + utcNow.getUTCMinutes())
+      ) {
+        daysAhead = 7; // already passed this week — schedule for next week
       }
-      const targetAstana = new Date(nowAstana);
-      targetAstana.setUTCDate(nowAstana.getUTCDate() + daysOffset);
-      targetAstana.setUTCHours(t.hour, t.minute, 0, 0);
-      const targetUTC = targetAstana.getTime() - ASTANA_OFFSET_MS;
-      const delay = targetUTC - now;
+      candidate.setUTCDate(candidate.getUTCDate() + daysAhead);
+
+      const delay = candidate.getTime() - now;
       if (delay > 0 && delay < minDelay) minDelay = delay;
     }
 
-    console.log(`⏰ Следующая promo-рассылка через ${Math.round(minDelay / 60000)} мин.`);
+    console.log(`⏰ Next promo in ${Math.round(minDelay / 60000)} min.`);
     return minDelay;
   }
 
-  // Планировщик: запускает promo и перепланирует на следующее время
+  // Scheduler: fires promo and reschedules for the next time
   function schedulePromo() {
-    const delay = msUntilNextPromoAstana();
+    const delay = msUntilNextPromoEST();
     setTimeout(() => {
       sendPromoMessage();
-      schedulePromo(); // перепланировать на следующий раз
+      schedulePromo();
     }, delay);
   }
 
@@ -607,7 +627,7 @@ client.on("channelCreate", async (channel) => {
         .setFooter({ text: FOOTER_TEXT });
 
       const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId("btn_buy").setLabel("🚀 BUY AUTO JOINER").setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId("btn_buy").setLabel("🤖 BUY AUTO JOINER — 1 WEEK").setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId("btn_buy_lagger").setLabel("⚡ BUY LAGGER").setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId("btn_pay").setLabel("💳 Top Up").setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId("btn_balance").setLabel("💰 Balance").setStyle(ButtonStyle.Secondary)
@@ -1363,9 +1383,7 @@ const PRODUCTS = {
     description: "Automatically join rich servers",
     isAccess:    false,
     tiers: [
-      { days: 1, price: 15, originalPrice: 20 },
-      { days: 2, price: 25, originalPrice: 50 },
-      { days: 3, price: 35, originalPrice: 70 }
+      { days: 7, label: "1 Week", price: 15 }
     ]
   },
   notifier: {
