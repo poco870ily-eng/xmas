@@ -485,8 +485,8 @@ client.once("ready", async () => {
     const TARGETS_UTC = [
       { dayOfWeek: 6, hour: 19, minute:  0 },  // Sunday 00:00 GMT+5  → Sat 19:00 UTC
       { dayOfWeek: 6, hour:  6, minute: 30 },  // Saturday 11:30 GMT+5 → Sat 06:30 UTC
-      { dayOfWeek: 3, hour: 22, minute: 30 },  // Wednesday 17:30 EST → Wed 22:30 UTC
-      { dayOfWeek: 3, hour: 23, minute:  0 }   // Wednesday 18:00 EST → Wed 23:00 UTC
+      { dayOfWeek: 2, hour: 21, minute: 30 },  // Wednesday 02:30 GMT+5 (= Tue 21:30 UTC)
+      { dayOfWeek: 2, hour: 22, minute:  0 }   // Wednesday 03:00 GMT+5 (= Tue 22:00 UTC)
     ];
 
     let minDelay = Infinity;
