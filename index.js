@@ -490,6 +490,7 @@ client.once("ready", async () => {
     ];
 
     let minDelay = Infinity;
+    let nextPromoDate = null;
 
     for (const t of TARGETS_UTC) {
       const candidate = new Date(utcNow);
@@ -508,10 +509,25 @@ client.once("ready", async () => {
       candidate.setUTCDate(candidate.getUTCDate() + daysAhead);
 
       const delay = candidate.getTime() - now;
-      if (delay > 0 && delay < minDelay) minDelay = delay;
+      if (delay > 0 && delay < minDelay) {
+        minDelay = delay;
+        nextPromoDate = new Date(candidate.getTime());
+      }
     }
 
-    console.log(`⏰ Next promo in ${Math.round(minDelay / 60000)} min.`);
+    // Format next promo time in GMT+5 (Astana)
+    const gmt5Date = new Date(nextPromoDate.getTime() + 5 * 60 * 60 * 1000);
+    const pad = n => String(n).padStart(2, "0");
+    const DAYS_RU = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
+    const dayName = DAYS_RU[gmt5Date.getUTCDay()];
+    const dateStr = `${pad(gmt5Date.getUTCDate())}.${pad(gmt5Date.getUTCMonth() + 1)}.${gmt5Date.getUTCFullYear()}`;
+    const timeStr = `${pad(gmt5Date.getUTCHours())}:${pad(gmt5Date.getUTCMinutes())}`;
+    const totalMin = Math.round(minDelay / 60000);
+    const hLeft = Math.floor(totalMin / 60);
+    const mLeft = totalMin % 60;
+    const delayStr = hLeft > 0 ? `${hLeft}ч ${mLeft}мин` : `${mLeft}мин`;
+
+    console.log(`⏰ Следующее промо через ${delayStr} — ${dayName} ${dateStr} в ${timeStr} (GMT+5 Астана)`);
     return minDelay;
   }
 
